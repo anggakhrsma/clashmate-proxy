@@ -6,6 +6,5 @@ dist/
 npm-debug.log*
 .DS_Store
 coverage/
-*.md
 data/*.sqlite
 data/*.sqlite-*

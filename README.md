@@ -95,5 +95,24 @@ docker build -t clashmate-proxy .
 Run:
 
 ```bash
-docker run --rm -p 3000:3000 --env-file .env clashmate-proxy
+docker run --rm -p 3000:3000 \
+  --env-file .env \
+  -v "$(pwd)/data:/app/data" \
+  clashmate-proxy
 ```
+
+Container notes:
+- image entrypoint runs `node /app/dist/index.js`
+- the image includes a Docker `HEALTHCHECK` against `/health`
+- for local Docker usage, persist SQLite by mounting `./data` to `/app/data`
+
+Pterodactyl / MonkeyBytes:
+- use the built container image as the server image
+- startup command: `node /app/dist/index.js`
+- set `HOST=0.0.0.0`
+- set `NODE_ENV=production`
+- set `SQLITE_PATH=/home/container/data/clashmate-proxy.sqlite`
+- keep the server's persistent storage under `/home/container/data`
+- configure all required secrets/account credentials as environment variables in the panel
+
+See `docs/pterodactyl.md` for a deployment checklist.

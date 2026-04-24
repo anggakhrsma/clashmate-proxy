@@ -1,6 +1,10 @@
 node_modules
 dist
+data
 .git
+.pi
 .gitignore
+.env
 README.md
+docs
 npm-debug.log*
