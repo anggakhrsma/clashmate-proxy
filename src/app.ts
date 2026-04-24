@@ -9,6 +9,7 @@ import Fastify, {
 import { createSecretAuthHook } from './auth/guards.js';
 import type { AppEnv } from './config/env.js';
 import type { ClashApiKeyManager } from './key-manager/service.js';
+import type { SqlitePersistence } from './persistence/database.js';
 import {
   ClashApiProxyService,
   ProxyTransportError,
@@ -27,8 +28,14 @@ type BuildAppInput = {
   >;
   keyManager: Pick<
     ClashApiKeyManager,
-    'acquireKey' | 'markKeyHealthy' | 'reportUpstreamFailure'
+    | 'acquireKey'
+    | 'forceRefreshAllKeys'
+    | 'getStatusSnapshot'
+    | 'markKeyHealthy'
+    | 'reportUpstreamFailure'
+    | 'setAccountEnabled'
   >;
+  persistence: Pick<SqlitePersistence, 'listAppState' | 'listLifecycleEvents'>;
 } & FastifyServerOptions;
 
 const PROXY_HTTP_METHODS = [
@@ -49,6 +56,68 @@ function getProxyBody(request: FastifyRequest): unknown {
   return request.body;
 }
 
+function maskKeyValue(value: string): string {
+  if (value.length <= 10) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function parseJsonValue(value: string | null): unknown {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function sanitizeStatusSnapshot(
+  snapshot: Awaited<ReturnType<ClashApiKeyManager['getStatusSnapshot']>>,
+) {
+  return {
+    eligibleKeyCount: snapshot.eligibleKeyCount,
+    lastRotationCursor: snapshot.lastRotationCursor,
+    lastValidationCompletedAt: snapshot.lastValidationCompletedAt,
+    accounts: snapshot.accounts.map((account) => ({
+      id: account.id,
+      slot: account.slot,
+      email: account.email,
+      isEnabled: account.isEnabled,
+      isHealthy: account.isHealthy,
+      lastLoginAt: account.lastLoginAt,
+      unhealthyUntil: account.unhealthyUntil,
+      lastError: account.lastError,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+      healthyManagedKeyCount: account.healthyManagedKeyCount,
+      eligibleManagedKeyCount: account.eligibleManagedKeyCount,
+      managedKeys: account.managedKeys.map((managedKey) => ({
+        id: managedKey.id,
+        developerAccountId: managedKey.developerAccountId,
+        portalKeyId: managedKey.portalKeyId,
+        keyName: managedKey.keyName,
+        keyValueMasked: maskKeyValue(managedKey.keyValue),
+        cidrRanges: managedKey.cidrRanges,
+        isManaged: managedKey.isManaged,
+        isActive: managedKey.isActive,
+        isHealthy: managedKey.isHealthy,
+        invalidReason: managedKey.invalidReason,
+        lastUsedAt: managedKey.lastUsedAt,
+        lastValidatedAt: managedKey.lastValidatedAt,
+        lastSeenAt: managedKey.lastSeenAt,
+        unhealthyUntil: managedKey.unhealthyUntil,
+        createdAt: managedKey.createdAt,
+        updatedAt: managedKey.updatedAt,
+      })),
+    })),
+  };
+}
+
 function sendProxyResponse(
   reply: FastifyReply,
   response: Awaited<ReturnType<ClashApiProxyService['forwardRequest']>>,
@@ -65,6 +134,11 @@ function sendProxyResponse(
   }
 
   return reply.send(response.body);
+}
+
+function parseAccountSlot(rawSlot: string): number | null {
+  const slot = Number.parseInt(rawSlot, 10);
+  return Number.isInteger(slot) && slot > 0 ? slot : null;
 }
 
 async function registerProxyRoutes(
@@ -173,12 +247,129 @@ async function registerAdminRoutes(
       name: 'clashmate-proxy',
       scope: 'admin',
       status: 'ok',
+      endpoints: {
+        status: '/admin/status',
+        debug: '/admin/debug',
+        refresh: '/admin/refresh',
+        enableAccount: '/admin/accounts/:slot/enable',
+        disableAccount: '/admin/accounts/:slot/disable',
+      },
     };
+  });
+
+  app.get('/admin/status', async () => {
+    const snapshot = await input.keyManager.getStatusSnapshot();
+
+    return {
+      generatedAt: new Date().toISOString(),
+      ...sanitizeStatusSnapshot(snapshot),
+    };
+  });
+
+  app.get('/admin/debug', async () => {
+    const [snapshot, appState, lifecycleEvents] = await Promise.all([
+      input.keyManager.getStatusSnapshot(),
+      Promise.resolve(input.persistence.listAppState()),
+      Promise.resolve(input.persistence.listLifecycleEvents(50)),
+    ]);
+
+    return {
+      generatedAt: new Date().toISOString(),
+      status: sanitizeStatusSnapshot(snapshot),
+      appState,
+      lifecycleEvents: lifecycleEvents.map((event) => ({
+        id: event.id,
+        developerAccountId: event.developerAccountId,
+        apiKeyId: event.apiKeyId,
+        eventType: event.eventType,
+        message: event.message,
+        metadata: parseJsonValue(event.metadataJson),
+        createdAt: event.createdAt,
+      })),
+    };
+  });
+
+  app.post('/admin/refresh', async (_request, reply) => {
+    const summary = await input.keyManager.forceRefreshAllKeys();
+    return reply.code(202).send({
+      message: 'Managed key refresh completed.',
+      summary,
+    });
+  });
+
+  app.post<{
+    Params: {
+      slot: string;
+    };
+  }>('/admin/accounts/:slot/enable', async (request, reply) => {
+    const slot = parseAccountSlot(request.params.slot);
+
+    if (slot === null) {
+      return reply.code(400).send({
+        statusCode: 400,
+        message: 'Account slot must be a positive integer.',
+      });
+    }
+
+    try {
+      const account = await input.keyManager.setAccountEnabled(slot, true);
+      return reply.code(200).send({
+        message: 'Developer account enabled.',
+        account,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes(`Developer account slot ${slot} does not exist`)
+      ) {
+        return reply.code(404).send({
+          statusCode: 404,
+          message: `Developer account slot ${slot} was not found.`,
+        });
+      }
+
+      throw error;
+    }
+  });
+
+  app.post<{
+    Params: {
+      slot: string;
+    };
+  }>('/admin/accounts/:slot/disable', async (request, reply) => {
+    const slot = parseAccountSlot(request.params.slot);
+
+    if (slot === null) {
+      return reply.code(400).send({
+        statusCode: 400,
+        message: 'Account slot must be a positive integer.',
+      });
+    }
+
+    try {
+      const account = await input.keyManager.setAccountEnabled(slot, false);
+      return reply.code(200).send({
+        message: 'Developer account disabled.',
+        account,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes(`Developer account slot ${slot} does not exist`)
+      ) {
+        return reply.code(404).send({
+          statusCode: 404,
+          message: `Developer account slot ${slot} was not found.`,
+        });
+      }
+
+      throw error;
+    }
   });
 }
 
 export function buildApp(input: BuildAppInput) {
-  const { env, keyManager, ...fastifyOptions } = input;
+  const { env, keyManager, persistence, ...fastifyOptions } = input;
   const app = Fastify({
     logger: fastifyOptions.logger ?? true,
     ...fastifyOptions,
@@ -202,6 +393,7 @@ export function buildApp(input: BuildAppInput) {
       ...fastifyOptions,
       env,
       keyManager,
+      persistence,
     });
   });
 
@@ -210,6 +402,7 @@ export function buildApp(input: BuildAppInput) {
       ...fastifyOptions,
       env,
       keyManager,
+      persistence,
     });
   });
 

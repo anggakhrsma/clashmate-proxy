@@ -129,6 +129,16 @@ type AppStateRow = {
   updated_at: string;
 };
 
+type LifecycleEventRow = {
+  id: number;
+  developer_account_id: number | null;
+  api_key_id: number | null;
+  event_type: string;
+  message: string | null;
+  metadata_json: string | null;
+  created_at: string;
+};
+
 export type DeveloperAccountRecord = {
   id: number;
   slot: number;
@@ -169,6 +179,12 @@ export type LifecycleEventRecord = {
   message: string | null;
   metadataJson: string | null;
   createdAt: string;
+};
+
+export type AppStateRecord = {
+  key: string;
+  value: string;
+  updatedAt: string;
 };
 
 export type PersistenceBootstrapResult = {
@@ -385,7 +401,6 @@ export class SqlitePersistence {
       )
       ON CONFLICT(slot) DO UPDATE SET
         email = excluded.email,
-        is_enabled = 1,
         updated_at = excluded.updated_at
     `);
 
@@ -893,9 +908,50 @@ export class SqlitePersistence {
     });
   }
 
-  getAppState(
-    key: string,
-  ): { key: string; value: string; updatedAt: string } | null {
+  listLifecycleEvents(limit = 50): LifecycleEventRecord[] {
+    const safeLimit = Math.max(1, Math.min(limit, 200));
+    const statement = this.database.prepare(`
+      SELECT
+        id,
+        developer_account_id,
+        api_key_id,
+        event_type,
+        message,
+        metadata_json,
+        created_at
+      FROM lifecycle_events
+      ORDER BY created_at DESC, id DESC
+      LIMIT :limit
+    `);
+
+    return (statement.all({ limit: safeLimit }) as LifecycleEventRow[]).map(
+      (row) => ({
+        id: row.id,
+        developerAccountId: row.developer_account_id,
+        apiKeyId: row.api_key_id,
+        eventType: row.event_type,
+        message: row.message,
+        metadataJson: row.metadata_json,
+        createdAt: row.created_at,
+      }),
+    );
+  }
+
+  listAppState(): AppStateRecord[] {
+    const statement = this.database.prepare(`
+      SELECT state_key, state_value, updated_at
+      FROM app_state
+      ORDER BY state_key ASC
+    `);
+
+    return (statement.all() as AppStateRow[]).map((row) => ({
+      key: row.state_key,
+      value: row.state_value,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  getAppState(key: string): AppStateRecord | null {
     const statement = this.database.prepare(`
       SELECT state_key, state_value, updated_at
       FROM app_state

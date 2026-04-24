@@ -447,6 +447,46 @@ export class ClashApiKeyManager {
     return this.runValidationSweep('force-refresh');
   }
 
+  async setAccountEnabled(
+    slot: number,
+    isEnabled: boolean,
+  ): Promise<DeveloperAccountRecord> {
+    return this.queue.run(async () => {
+      const updatedAccount =
+        this.input.persistence.updateDeveloperAccountStatus({
+          slot,
+          isEnabled,
+        });
+
+      this.input.persistence.recordLifecycleEvent({
+        eventType: isEnabled ? 'account.enabled' : 'account.disabled',
+        accountSlot: slot,
+        message: isEnabled
+          ? 'Developer account enabled by admin request.'
+          : 'Developer account disabled by admin request.',
+        metadata: {
+          isEnabled,
+        },
+      });
+
+      if (isEnabled) {
+        await this.runValidationSweepUnlocked('admin-enable-account');
+        const reloadedAccount =
+          this.input.persistence.getDeveloperAccountBySlot(slot);
+
+        if (!reloadedAccount) {
+          throw new Error(
+            `Developer account slot ${slot} disappeared after enable operation.`,
+          );
+        }
+
+        return reloadedAccount;
+      }
+
+      return updatedAccount;
+    });
+  }
+
   async getStatusSnapshot(): Promise<KeyManagerStatusSnapshot> {
     return this.queue.run(() => this.getStatusSnapshotUnlocked());
   }

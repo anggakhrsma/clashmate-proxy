@@ -55,6 +55,7 @@ const keyManager = createKeyManager({
 const app = buildApp({
   env,
   keyManager,
+  persistence,
   logger: {
     level: env.logLevel,
   },

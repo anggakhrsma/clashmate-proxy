@@ -69,6 +69,14 @@ Authentication:
   - `x-client-secret` / `x-admin-secret`
   - `Authorization: Bearer <secret>`
 
+Admin API:
+- `GET /admin` - basic admin service info
+- `GET /admin/status` - account/key status snapshot with masked key values
+- `GET /admin/debug` - status snapshot, app state, and recent lifecycle events
+- `POST /admin/refresh` - force an immediate managed key validation/refresh sweep
+- `POST /admin/accounts/:slot/enable` - enable a configured developer account
+- `POST /admin/accounts/:slot/disable` - disable a configured developer account
+
 ## Docker / Pterodactyl
 
 Build:
