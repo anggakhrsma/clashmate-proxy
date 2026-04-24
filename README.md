@@ -44,6 +44,13 @@ Proxy resilience settings:
 - `UPSTREAM_MAX_RETRIES` bounds how many retry attempts are made after the first failed upstream attempt
 - retryable auth/key/IP/network/upstream failures temporarily sideline bad keys and retry with the next healthy candidate
 
+GET response caching:
+- only `GET /v1...` proxy requests are cached
+- cache TTL is controlled by `CACHE_TTL_SECONDS`
+- cache keys are based on the exact request path plus query string
+- only successful `2xx` upstream GET responses are cached
+- proxy responses include `x-clashmate-cache: HIT|MISS|BYPASS`
+
 ## Local startup
 
 1. Copy `.env.example` to `.env`

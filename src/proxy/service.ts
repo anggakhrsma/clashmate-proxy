@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 
+import { ProxyResponseCache } from '../cache/memory.js';
 import type {
   ManagedApiKeyLease,
   ReportUpstreamFailureResult,
@@ -28,7 +29,9 @@ export type ForwardProxyResponse = {
   headers: Record<string, string>;
   body: Buffer | null;
   upstreamUrl: string;
-  keyLease: ManagedApiKeyLease;
+  keyLease: ManagedApiKeyLease | null;
+  cacheStatus: 'BYPASS' | 'HIT' | 'MISS';
+  cachedAt: string | null;
 };
 
 type RetryableUpstreamFailure = {
@@ -92,8 +95,20 @@ function shouldReadResponseBody(method: string): boolean {
   return method !== 'HEAD';
 }
 
+function shouldCacheRequest(method: string): boolean {
+  return method === 'GET';
+}
+
+function shouldCacheResponseStatus(status: number): boolean {
+  return status >= 200 && status < 300;
+}
+
 function normalizeRawUrl(rawUrl: string): string {
   return rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+}
+
+function buildCacheKey(method: string, rawUrl: string): string {
+  return `${method.toUpperCase()}:${normalizeRawUrl(rawUrl)}`;
 }
 
 function buildForwardHeaders(input: {
@@ -315,12 +330,14 @@ export class ProxyTransportError extends Error {
 export class ClashApiProxyService {
   private readonly logger: ProxyLogger;
   private readonly fetchImplementation: FetchLike;
+  private readonly responseCache: ProxyResponseCache;
 
   constructor(
     private readonly input: {
       upstreamBaseUrl: string;
       upstreamTimeoutMs: number;
       upstreamMaxRetries: number;
+      cacheTtlSeconds: number;
       keyManager: {
         acquireKey: () => Promise<ManagedApiKeyLease>;
         markKeyHealthy: (keyValue: string) => Promise<unknown>;
@@ -332,6 +349,7 @@ export class ClashApiProxyService {
           metadata?: Record<string, unknown>;
         }) => Promise<ReportUpstreamFailureResult>;
       };
+      responseCache?: ProxyResponseCache;
       fetchImplementation?: FetchLike;
       logger?: Partial<ProxyLogger>;
     },
@@ -343,6 +361,9 @@ export class ClashApiProxyService {
       error: bindLoggerMethod(input.logger, 'error') as ProxyLogger['error'],
     };
     this.fetchImplementation = input.fetchImplementation ?? fetch;
+    this.responseCache =
+      input.responseCache ??
+      new ProxyResponseCache(input.cacheTtlSeconds * 1000);
   }
 
   async forwardRequest(
@@ -350,8 +371,35 @@ export class ClashApiProxyService {
   ): Promise<ForwardProxyResponse> {
     const rawUrl = normalizeRawUrl(request.rawUrl);
     const upstreamUrl = new URL(rawUrl, this.input.upstreamBaseUrl).toString();
+    const cacheKey = buildCacheKey(request.method, rawUrl);
     const failures: UpstreamAttemptFailure[] = [];
     const maximumAttempts = this.input.upstreamMaxRetries + 1;
+
+    if (shouldCacheRequest(request.method)) {
+      const cachedResponse = this.responseCache.get(cacheKey);
+
+      if (cachedResponse) {
+        this.logger.debug(
+          {
+            method: request.method,
+            rawUrl,
+            upstreamUrl: cachedResponse.upstreamUrl,
+            cachedAt: cachedResponse.cachedAt,
+          },
+          'serving proxied response from GET cache',
+        );
+
+        return {
+          status: cachedResponse.status,
+          headers: cachedResponse.headers,
+          body: cachedResponse.body,
+          upstreamUrl: cachedResponse.upstreamUrl,
+          keyLease: null,
+          cacheStatus: 'HIT',
+          cachedAt: cachedResponse.cachedAt,
+        };
+      }
+    }
 
     for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
       let keyLease: ManagedApiKeyLease;
@@ -448,6 +496,21 @@ export class ClashApiProxyService {
 
         await this.input.keyManager.markKeyHealthy(keyLease.keyValue);
 
+        const responseHeaders = readResponseHeaders(response.headers);
+        const cacheStatus = shouldCacheRequest(request.method)
+          ? 'MISS'
+          : 'BYPASS';
+        const cachedResponse =
+          shouldCacheRequest(request.method) &&
+          shouldCacheResponseStatus(response.status)
+            ? this.responseCache.set(cacheKey, {
+                status: response.status,
+                headers: responseHeaders,
+                body: responseBody,
+                upstreamUrl,
+              })
+            : null;
+
         this.logger.debug(
           {
             attempt,
@@ -456,16 +519,19 @@ export class ClashApiProxyService {
             upstreamStatus: response.status,
             accountSlot: keyLease.accountSlot,
             apiKeyId: keyLease.apiKeyId,
+            cacheStatus,
           },
           'proxied request to Clash of Clans upstream',
         );
 
         return {
           status: response.status,
-          headers: readResponseHeaders(response.headers),
+          headers: responseHeaders,
           body: responseBody,
           upstreamUrl,
           keyLease,
+          cacheStatus,
+          cachedAt: cachedResponse?.cachedAt ?? null,
         };
       } catch (error) {
         if (error instanceof ProxyUnavailableError) {

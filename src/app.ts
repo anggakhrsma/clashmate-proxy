@@ -19,6 +19,7 @@ type BuildAppInput = {
   env: Pick<
     AppEnv,
     | 'adminApiSecret'
+    | 'cacheTtlSeconds'
     | 'clientApiSecret'
     | 'upstreamBaseUrl'
     | 'upstreamTimeoutMs'
@@ -53,6 +54,7 @@ function sendProxyResponse(
   response: Awaited<ReturnType<ClashApiProxyService['forwardRequest']>>,
 ): FastifyReply {
   reply.code(response.status);
+  reply.header('x-clashmate-cache', response.cacheStatus);
 
   for (const [name, value] of Object.entries(response.headers)) {
     reply.header(name, value);
@@ -79,6 +81,7 @@ async function registerProxyRoutes(
   );
 
   const proxyService = new ClashApiProxyService({
+    cacheTtlSeconds: input.env.cacheTtlSeconds,
     upstreamBaseUrl: input.env.upstreamBaseUrl,
     upstreamTimeoutMs: input.env.upstreamTimeoutMs,
     upstreamMaxRetries: input.env.upstreamMaxRetries,
