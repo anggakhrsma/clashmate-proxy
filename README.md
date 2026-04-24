@@ -1,6 +1,13 @@
 # clashmate-proxy
 
-Foundation for a Clash of Clans API proxy built with Fastify, TypeScript, and SQLite.
+Clash of Clans API proxy built with Fastify, TypeScript, and SQLite.
+
+## Documentation map
+
+- setup and operations: [`docs/setup-and-operations.md`](./docs/setup-and-operations.md)
+- environment reference: [`docs/environment.md`](./docs/environment.md)
+- Pterodactyl deployment: [`docs/pterodactyl.md`](./docs/pterodactyl.md)
+- Discord bot migration: [`docs/bot-integration.md`](./docs/bot-integration.md)
 
 ## Runtime requirement
 
@@ -19,6 +26,8 @@ Foundation for a Clash of Clans API proxy built with Fastify, TypeScript, and SQ
 ## Environment
 
 Copy `.env.example` to `.env` and update the values.
+
+For the full variable reference, see [`docs/environment.md`](./docs/environment.md).
 
 Required configuration includes:
 - `CLIENT_API_SECRET`
@@ -64,6 +73,8 @@ GET response caching:
 1. Copy `.env.example` to `.env`
 2. Install dependencies: `npm install`
 3. Start dev server: `npm run dev`
+
+For a full setup and day-2 operations guide, see [`docs/setup-and-operations.md`](./docs/setup-and-operations.md).
 
 Proxy routing:
 - the proxy forwards official Clash of Clans API routes under `/v1/*`
