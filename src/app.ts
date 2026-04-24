@@ -9,7 +9,11 @@ import Fastify, {
 import { createSecretAuthHook } from './auth/guards.js';
 import type { AppEnv } from './config/env.js';
 import type { ClashApiKeyManager } from './key-manager/service.js';
-import { ClashApiProxyService } from './proxy/service.js';
+import {
+  ClashApiProxyService,
+  ProxyTransportError,
+  ProxyUnavailableError,
+} from './proxy/service.js';
 
 type BuildAppInput = {
   env: Pick<
@@ -18,8 +22,12 @@ type BuildAppInput = {
     | 'clientApiSecret'
     | 'upstreamBaseUrl'
     | 'upstreamTimeoutMs'
+    | 'upstreamMaxRetries'
   >;
-  keyManager: Pick<ClashApiKeyManager, 'acquireKey' | 'markKeyHealthy'>;
+  keyManager: Pick<
+    ClashApiKeyManager,
+    'acquireKey' | 'markKeyHealthy' | 'reportUpstreamFailure'
+  >;
 } & FastifyServerOptions;
 
 const PROXY_HTTP_METHODS = [
@@ -73,6 +81,7 @@ async function registerProxyRoutes(
   const proxyService = new ClashApiProxyService({
     upstreamBaseUrl: input.env.upstreamBaseUrl,
     upstreamTimeoutMs: input.env.upstreamTimeoutMs,
+    upstreamMaxRetries: input.env.upstreamMaxRetries,
     keyManager: input.keyManager,
     logger: app.log,
   });
@@ -111,11 +120,14 @@ async function registerProxyRoutes(
       );
 
       const statusCode =
-        error instanceof Error &&
-        error.message ===
-          'No healthy managed Clash of Clans API keys are available.'
+        error instanceof ProxyUnavailableError ||
+        (error instanceof Error &&
+          error.message ===
+            'No healthy managed Clash of Clans API keys are available.')
           ? 503
-          : 502;
+          : error instanceof ProxyTransportError
+            ? error.statusCode
+            : 502;
 
       return reply.code(statusCode).send({
         message:

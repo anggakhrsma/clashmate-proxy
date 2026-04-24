@@ -40,6 +40,10 @@ Key manager behavior:
 - rotates eligible managed keys in round-robin order
 - can regenerate a failed key and mark unhealthy accounts/keys on portal or upstream auth failures
 
+Proxy resilience settings:
+- `UPSTREAM_MAX_RETRIES` bounds how many retry attempts are made after the first failed upstream attempt
+- retryable auth/key/IP/network/upstream failures temporarily sideline bad keys and retry with the next healthy candidate
+
 ## Local startup
 
 1. Copy `.env.example` to `.env`

@@ -38,10 +38,41 @@ export type ManagedApiKeyLease = {
 export type KeyFailureReason =
   | 'UPSTREAM_AUTH_FAILURE'
   | 'UPSTREAM_FORBIDDEN'
+  | 'UPSTREAM_INVALID_IP'
   | 'UPSTREAM_KEY_REVOKED'
+  | 'UPSTREAM_NETWORK_ERROR'
+  | 'UPSTREAM_RATE_LIMITED'
+  | 'UPSTREAM_SERVER_ERROR'
+  | 'UPSTREAM_TIMEOUT'
   | 'VALIDATION_FAILED'
   | 'MANUAL_REGENERATION'
   | 'UNKNOWN_FAILURE';
+
+export type UpstreamFailureCategory =
+  | 'AUTHENTICATION'
+  | 'INVALID_IP'
+  | 'INVALID_KEY'
+  | 'NETWORK_ERROR'
+  | 'RATE_LIMITED'
+  | 'SERVER_ERROR'
+  | 'TIMEOUT'
+  | 'UNKNOWN';
+
+export type ReportUpstreamFailureInput = {
+  keyValue: string;
+  category: UpstreamFailureCategory;
+  statusCode?: number | null;
+  message?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ReportUpstreamFailureResult = {
+  handled: boolean;
+  markedAccountUnhealthy: boolean;
+  markedKeyUnhealthy: boolean;
+  scheduledRegeneration: boolean;
+  scheduledValidationSweep: boolean;
+};
 
 export type ValidationSweepSummary = {
   reason: string;
@@ -156,6 +187,56 @@ function compareCandidates(
   }
 
   return left.key.id - right.key.id;
+}
+
+function mapUpstreamFailureCategoryToReason(
+  category: UpstreamFailureCategory,
+): KeyFailureReason {
+  switch (category) {
+    case 'AUTHENTICATION':
+      return 'UPSTREAM_AUTH_FAILURE';
+    case 'INVALID_IP':
+      return 'UPSTREAM_INVALID_IP';
+    case 'INVALID_KEY':
+      return 'UPSTREAM_KEY_REVOKED';
+    case 'NETWORK_ERROR':
+      return 'UPSTREAM_NETWORK_ERROR';
+    case 'RATE_LIMITED':
+      return 'UPSTREAM_RATE_LIMITED';
+    case 'SERVER_ERROR':
+      return 'UPSTREAM_SERVER_ERROR';
+    case 'TIMEOUT':
+      return 'UPSTREAM_TIMEOUT';
+    case 'UNKNOWN':
+      return 'UNKNOWN_FAILURE';
+  }
+}
+
+function shouldRegenerateForUpstreamFailure(
+  category: UpstreamFailureCategory,
+): boolean {
+  return (
+    category === 'AUTHENTICATION' ||
+    category === 'INVALID_IP' ||
+    category === 'INVALID_KEY'
+  );
+}
+
+function shouldMarkAccountUnhealthyForUpstreamFailure(
+  category: UpstreamFailureCategory,
+): boolean {
+  return shouldRegenerateForUpstreamFailure(category);
+}
+
+function shouldScheduleValidationForUpstreamFailure(
+  category: UpstreamFailureCategory,
+): boolean {
+  return (
+    category === 'NETWORK_ERROR' ||
+    category === 'RATE_LIMITED' ||
+    category === 'SERVER_ERROR' ||
+    category === 'TIMEOUT'
+  );
 }
 
 function bindLoggerMethod(
@@ -343,6 +424,12 @@ export class ClashApiKeyManager {
     });
   }
 
+  async reportUpstreamFailure(
+    input: ReportUpstreamFailureInput,
+  ): Promise<ReportUpstreamFailureResult> {
+    return this.queue.run(() => this.reportUpstreamFailureUnlocked(input));
+  }
+
   async regenerateKey(input: {
     keyValue: string;
     reason: KeyFailureReason;
@@ -362,6 +449,22 @@ export class ClashApiKeyManager {
 
   async getStatusSnapshot(): Promise<KeyManagerStatusSnapshot> {
     return this.queue.run(() => this.getStatusSnapshotUnlocked());
+  }
+
+  private runDetachedQueuedTask(
+    label: string,
+    task: () => Promise<unknown>,
+  ): void {
+    void this.queue.run(task).catch((error) => {
+      this.logger.error(
+        {
+          err: error,
+          label,
+          metadata: toErrorMetadata(error),
+        },
+        'detached key manager task failed',
+      );
+    });
   }
 
   private getCredentialsForSlot(
@@ -697,6 +800,127 @@ export class ClashApiKeyManager {
     );
 
     return savedKey;
+  }
+
+  private reportUpstreamFailureUnlocked(
+    input: ReportUpstreamFailureInput,
+  ): ReportUpstreamFailureResult {
+    const existingKey = this.input.persistence.getApiKeyByValue(input.keyValue);
+
+    if (!existingKey) {
+      this.logger.warn(
+        {
+          keyValue: maskKeyValue(input.keyValue),
+          category: input.category,
+          statusCode: input.statusCode ?? null,
+        },
+        'cannot record upstream failure for unknown managed API key',
+      );
+
+      return {
+        handled: false,
+        markedAccountUnhealthy: false,
+        markedKeyUnhealthy: false,
+        scheduledRegeneration: false,
+        scheduledValidationSweep: false,
+      };
+    }
+
+    const account = this.input.persistence
+      .listDeveloperAccounts()
+      .find(
+        (developerAccount) =>
+          developerAccount.id === existingKey.developerAccountId,
+      );
+
+    if (!account) {
+      throw new Error(
+        `Developer account ${existingKey.developerAccountId} does not exist for API key ${existingKey.keyValue}.`,
+      );
+    }
+
+    const occurredAt = timestamp();
+    const failureReason = mapUpstreamFailureCategoryToReason(input.category);
+    const shouldRegenerate = shouldRegenerateForUpstreamFailure(input.category);
+    const shouldMarkAccountUnhealthy =
+      shouldMarkAccountUnhealthyForUpstreamFailure(input.category);
+    const shouldScheduleValidation = shouldScheduleValidationForUpstreamFailure(
+      input.category,
+    );
+
+    this.input.persistence.updateApiKeyStatus({
+      keyValue: existingKey.keyValue,
+      isActive: shouldRegenerate ? false : existingKey.isActive,
+      isHealthy: false,
+      invalidReason: failureReason,
+      lastValidatedAt: occurredAt,
+      unhealthyUntil: addMilliseconds(occurredAt, this.keyUnhealthyCooldownMs),
+    });
+
+    if (shouldMarkAccountUnhealthy) {
+      this.input.persistence.updateDeveloperAccountStatus({
+        slot: account.slot,
+        isHealthy: false,
+        unhealthyUntil: addMilliseconds(
+          occurredAt,
+          this.accountUnhealthyCooldownMs,
+        ),
+        lastError: input.message ?? failureReason,
+      });
+    }
+
+    this.input.persistence.recordLifecycleEvent({
+      eventType: 'key.upstream.failure',
+      accountSlot: account.slot,
+      apiKeyId: existingKey.id,
+      message: 'Managed API key failed while calling the upstream API.',
+      metadata: {
+        category: input.category,
+        reason: failureReason,
+        statusCode: input.statusCode ?? null,
+        keyValue: maskKeyValue(existingKey.keyValue),
+        portalKeyId: existingKey.portalKeyId,
+        ...input.metadata,
+      },
+    });
+
+    this.logger.warn(
+      {
+        accountSlot: account.slot,
+        apiKeyId: existingKey.id,
+        portalKeyId: existingKey.portalKeyId,
+        keyValue: maskKeyValue(existingKey.keyValue),
+        category: input.category,
+        statusCode: input.statusCode ?? null,
+      },
+      'managed API key marked unhealthy after upstream failure',
+    );
+
+    if (shouldRegenerate) {
+      this.runDetachedQueuedTask('upstream-regeneration', async () => {
+        await this.regenerateKeyUnlocked({
+          keyValue: existingKey.keyValue,
+          reason: failureReason,
+          metadata: {
+            upstreamFailureCategory: input.category,
+            upstreamStatusCode: input.statusCode ?? null,
+            ...input.metadata,
+          },
+        });
+      });
+    } else if (shouldScheduleValidation) {
+      this.runDetachedQueuedTask('upstream-validation-sweep', async () => {
+        await this.runValidationSweepUnlocked(`upstream:${input.category}`);
+      });
+    }
+
+    return {
+      handled: true,
+      markedAccountUnhealthy: shouldMarkAccountUnhealthy,
+      markedKeyUnhealthy: true,
+      scheduledRegeneration: shouldRegenerate,
+      scheduledValidationSweep: !shouldRegenerate && shouldScheduleValidation,
+    };
   }
 
   private async regenerateKeyUnlocked(input: {

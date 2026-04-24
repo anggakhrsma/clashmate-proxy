@@ -1,6 +1,10 @@
 import type { IncomingHttpHeaders } from 'node:http';
 
-import type { ManagedApiKeyLease } from '../key-manager/service.js';
+import type {
+  ManagedApiKeyLease,
+  ReportUpstreamFailureResult,
+  UpstreamFailureCategory,
+} from '../key-manager/service.js';
 
 type ProxyLogger = {
   debug: (...args: unknown[]) => void;
@@ -25,6 +29,19 @@ export type ForwardProxyResponse = {
   body: Buffer | null;
   upstreamUrl: string;
   keyLease: ManagedApiKeyLease;
+};
+
+type RetryableUpstreamFailure = {
+  category: UpstreamFailureCategory;
+  statusCode: number | null;
+  bodyText: string | null;
+};
+
+type UpstreamAttemptFailure = {
+  category: UpstreamFailureCategory;
+  statusCode: number | null;
+  keyValue: string;
+  accountSlot: number;
 };
 
 const DEFAULT_LOGGER: ProxyLogger = {
@@ -190,6 +207,111 @@ function readResponseHeaders(headers: Headers): Record<string, string> {
   return result;
 }
 
+function extractBodyText(body: Buffer | null): string | null {
+  if (!body || body.length === 0) {
+    return null;
+  }
+
+  return body.toString('utf8');
+}
+
+function normalizeUpstreamErrorText(bodyText: string | null): string {
+  return (bodyText ?? '').toLowerCase();
+}
+
+function classifyRetryableUpstreamFailure(input: {
+  status: number;
+  bodyText: string | null;
+}): RetryableUpstreamFailure | null {
+  const errorText = normalizeUpstreamErrorText(input.bodyText);
+
+  if (input.status === 401) {
+    return {
+      category: 'AUTHENTICATION',
+      statusCode: input.status,
+      bodyText: input.bodyText,
+    };
+  }
+
+  if (input.status === 403) {
+    const category =
+      errorText.includes('invalidip') ||
+      errorText.includes('invalid ip') ||
+      (errorText.includes('ip') && errorText.includes('accessdenied'))
+        ? 'INVALID_IP'
+        : errorText.includes('key') ||
+            errorText.includes('token') ||
+            errorText.includes('authorization') ||
+            errorText.includes('credential')
+          ? 'INVALID_KEY'
+          : 'AUTHENTICATION';
+
+    return {
+      category,
+      statusCode: input.status,
+      bodyText: input.bodyText,
+    };
+  }
+
+  if (input.status === 429) {
+    return {
+      category: 'RATE_LIMITED',
+      statusCode: input.status,
+      bodyText: input.bodyText,
+    };
+  }
+
+  if (input.status >= 500) {
+    return {
+      category: 'SERVER_ERROR',
+      statusCode: input.status,
+      bodyText: input.bodyText,
+    };
+  }
+
+  return null;
+}
+
+function maskKeyValue(value: string): string {
+  if (value.length <= 10) {
+    return value;
+  }
+
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown upstream error';
+}
+
+function getFailureStatusCode(failure: UpstreamAttemptFailure): number | null {
+  return failure.statusCode;
+}
+
+export class ProxyUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly failures: UpstreamAttemptFailure[];
+
+  constructor(message: string, failures: UpstreamAttemptFailure[]) {
+    super(message);
+    this.name = 'ProxyUnavailableError';
+    this.failures = failures;
+  }
+}
+
+export class ProxyTransportError extends Error {
+  readonly statusCode = 502;
+
+  constructor(message: string, cause?: unknown) {
+    super(message, cause ? { cause } : undefined);
+    this.name = 'ProxyTransportError';
+  }
+}
+
 export class ClashApiProxyService {
   private readonly logger: ProxyLogger;
   private readonly fetchImplementation: FetchLike;
@@ -198,9 +320,17 @@ export class ClashApiProxyService {
     private readonly input: {
       upstreamBaseUrl: string;
       upstreamTimeoutMs: number;
+      upstreamMaxRetries: number;
       keyManager: {
         acquireKey: () => Promise<ManagedApiKeyLease>;
         markKeyHealthy: (keyValue: string) => Promise<unknown>;
+        reportUpstreamFailure: (input: {
+          keyValue: string;
+          category: UpstreamFailureCategory;
+          statusCode?: number | null;
+          message?: string | null;
+          metadata?: Record<string, unknown>;
+        }) => Promise<ReportUpstreamFailureResult>;
       };
       fetchImplementation?: FetchLike;
       logger?: Partial<ProxyLogger>;
@@ -220,56 +350,181 @@ export class ClashApiProxyService {
   ): Promise<ForwardProxyResponse> {
     const rawUrl = normalizeRawUrl(request.rawUrl);
     const upstreamUrl = new URL(rawUrl, this.input.upstreamBaseUrl).toString();
-    const keyLease = await this.input.keyManager.acquireKey();
-    const forwardHeaders = buildForwardHeaders({
-      incomingHeaders: request.headers,
-      keyLease,
-      remoteAddress: request.remoteAddress,
-    });
-    const body = buildForwardBody({
-      method: request.method,
-      body: request.body,
-      headers: forwardHeaders,
-    });
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => {
-      controller.abort();
-    }, this.input.upstreamTimeoutMs);
+    const failures: UpstreamAttemptFailure[] = [];
+    const maximumAttempts = this.input.upstreamMaxRetries + 1;
 
-    try {
-      const response = await this.fetchImplementation(upstreamUrl, {
-        method: request.method,
-        headers: forwardHeaders,
-        body,
-        signal: controller.signal,
-        ...(body ? { duplex: 'half' as const } : {}),
-      });
-      const responseBody = shouldReadResponseBody(request.method)
-        ? Buffer.from(await response.arrayBuffer())
-        : null;
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      let keyLease: ManagedApiKeyLease;
 
-      await this.input.keyManager.markKeyHealthy(keyLease.keyValue);
+      try {
+        keyLease = await this.input.keyManager.acquireKey();
+      } catch (error) {
+        if (failures.length > 0) {
+          throw new ProxyUnavailableError(
+            'No healthy upstream API keys are available after retry exhaustion.',
+            failures,
+          );
+        }
 
-      this.logger.debug(
-        {
-          method: request.method,
-          upstreamUrl,
-          upstreamStatus: response.status,
-          accountSlot: keyLease.accountSlot,
-          apiKeyId: keyLease.apiKeyId,
-        },
-        'proxied request to Clash of Clans upstream',
-      );
+        throw error;
+      }
 
-      return {
-        status: response.status,
-        headers: readResponseHeaders(response.headers),
-        body: responseBody,
-        upstreamUrl,
+      const forwardHeaders = buildForwardHeaders({
+        incomingHeaders: request.headers,
         keyLease,
-      };
-    } finally {
-      clearTimeout(timeoutHandle);
+        remoteAddress: request.remoteAddress,
+      });
+      const body = buildForwardBody({
+        method: request.method,
+        body: request.body,
+        headers: forwardHeaders,
+      });
+      const controller = new AbortController();
+      const timeoutHandle = setTimeout(() => {
+        controller.abort();
+      }, this.input.upstreamTimeoutMs);
+
+      try {
+        const response = await this.fetchImplementation(upstreamUrl, {
+          method: request.method,
+          headers: forwardHeaders,
+          body,
+          signal: controller.signal,
+          ...(body ? { duplex: 'half' as const } : {}),
+        });
+        const responseBody = shouldReadResponseBody(request.method)
+          ? Buffer.from(await response.arrayBuffer())
+          : null;
+        const bodyText = extractBodyText(responseBody);
+        const retryableFailure = classifyRetryableUpstreamFailure({
+          status: response.status,
+          bodyText,
+        });
+
+        if (retryableFailure) {
+          failures.push({
+            category: retryableFailure.category,
+            statusCode: retryableFailure.statusCode,
+            keyValue: keyLease.keyValue,
+            accountSlot: keyLease.accountSlot,
+          });
+
+          const handledFailure =
+            await this.input.keyManager.reportUpstreamFailure({
+              keyValue: keyLease.keyValue,
+              category: retryableFailure.category,
+              statusCode: retryableFailure.statusCode,
+              message: bodyText,
+              metadata: {
+                upstreamUrl,
+                method: request.method,
+              },
+            });
+
+          this.logger.warn(
+            {
+              attempt,
+              maximumAttempts,
+              method: request.method,
+              upstreamUrl,
+              upstreamStatus: response.status,
+              failureCategory: retryableFailure.category,
+              accountSlot: keyLease.accountSlot,
+              apiKeyId: keyLease.apiKeyId,
+              handledFailure,
+            },
+            'retryable upstream failure detected; rotating to the next key',
+          );
+
+          if (attempt >= maximumAttempts) {
+            throw new ProxyUnavailableError(
+              'No healthy upstream API keys are available after retry exhaustion.',
+              failures,
+            );
+          }
+
+          continue;
+        }
+
+        await this.input.keyManager.markKeyHealthy(keyLease.keyValue);
+
+        this.logger.debug(
+          {
+            attempt,
+            method: request.method,
+            upstreamUrl,
+            upstreamStatus: response.status,
+            accountSlot: keyLease.accountSlot,
+            apiKeyId: keyLease.apiKeyId,
+          },
+          'proxied request to Clash of Clans upstream',
+        );
+
+        return {
+          status: response.status,
+          headers: readResponseHeaders(response.headers),
+          body: responseBody,
+          upstreamUrl,
+          keyLease,
+        };
+      } catch (error) {
+        if (error instanceof ProxyUnavailableError) {
+          throw error;
+        }
+
+        const category: UpstreamFailureCategory =
+          error instanceof Error && error.name === 'AbortError'
+            ? 'TIMEOUT'
+            : 'NETWORK_ERROR';
+        const statusCode = null;
+
+        failures.push({
+          category,
+          statusCode,
+          keyValue: keyLease.keyValue,
+          accountSlot: keyLease.accountSlot,
+        });
+
+        const handledFailure =
+          await this.input.keyManager.reportUpstreamFailure({
+            keyValue: keyLease.keyValue,
+            category,
+            statusCode,
+            message: toErrorMessage(error),
+            metadata: {
+              upstreamUrl,
+              method: request.method,
+            },
+          });
+
+        this.logger.warn(
+          {
+            attempt,
+            maximumAttempts,
+            method: request.method,
+            upstreamUrl,
+            failureCategory: category,
+            accountSlot: keyLease.accountSlot,
+            apiKeyId: keyLease.apiKeyId,
+            handledFailure,
+            err: error,
+          },
+          'upstream transport failure detected; rotating to the next key',
+        );
+
+        if (attempt >= maximumAttempts) {
+          throw new ProxyUnavailableError(
+            'No healthy upstream API keys are available after retry exhaustion.',
+            failures,
+          );
+        }
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
     }
+
+    throw new ProxyTransportError(
+      'Failed to complete proxy request due to an unexpected retry state.',
+    );
   }
 }

@@ -10,6 +10,7 @@ const DEFAULT_CACHE_TTL_SECONDS = 10;
 const DEFAULT_VALIDATION_SWEEP_INTERVAL_MINUTES = 15;
 const DEFAULT_UPSTREAM_BASE_URL = 'https://api.clashofclans.com/v1';
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10000;
+const DEFAULT_UPSTREAM_MAX_RETRIES = 2;
 const DEFAULT_KEY_UNHEALTHY_COOLDOWN_SECONDS = 60;
 const DEFAULT_ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS = 300;
 const DEFAULT_MANAGED_KEY_NAME_PREFIX = 'clashmate-proxy';
@@ -48,6 +49,7 @@ export type AppEnv = {
   validationSweepIntervalMinutes: number;
   upstreamBaseUrl: string;
   upstreamTimeoutMs: number;
+  upstreamMaxRetries: number;
   keyUnhealthyCooldownSeconds: number;
   accountUnhealthyCooldownSeconds: number;
   managedKeyAllowedCidrs: string[];
@@ -93,6 +95,26 @@ function parsePositiveInteger(
 
   if (!Number.isInteger(parsed) || parsed <= 0) {
     errors.push(`${name} must be a positive integer. Received: ${value}`);
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeInteger(
+  name: string,
+  value: string | undefined,
+  fallback: number,
+  errors: string[],
+): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    errors.push(`${name} must be a non-negative integer. Received: ${value}`);
     return fallback;
   }
 
@@ -270,6 +292,12 @@ export function loadEnv(): AppEnv {
     DEFAULT_UPSTREAM_TIMEOUT_MS,
     errors,
   );
+  const upstreamMaxRetries = parseNonNegativeInteger(
+    'UPSTREAM_MAX_RETRIES',
+    readEnvValue('UPSTREAM_MAX_RETRIES'),
+    DEFAULT_UPSTREAM_MAX_RETRIES,
+    errors,
+  );
   const keyUnhealthyCooldownSeconds = parsePositiveInteger(
     'KEY_UNHEALTHY_COOLDOWN_SECONDS',
     readEnvValue('KEY_UNHEALTHY_COOLDOWN_SECONDS'),
@@ -330,6 +358,7 @@ export function loadEnv(): AppEnv {
     validationSweepIntervalMinutes,
     upstreamBaseUrl,
     upstreamTimeoutMs,
+    upstreamMaxRetries,
     keyUnhealthyCooldownSeconds,
     accountUnhealthyCooldownSeconds,
     managedKeyAllowedCidrs,
