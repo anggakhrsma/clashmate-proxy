@@ -11,6 +11,7 @@ Foundation for a Clash of Clans API proxy built with Fastify, TypeScript, and SQ
 - `npm run dev` - start in watch mode
 - `npm run build` - compile TypeScript to `dist/`
 - `npm run start` - run the compiled server
+- `npm run test` - run validation tests for proxy, key manager, app auth, and persistence
 - `npm run lint` - run Biome checks
 - `npm run format` - format the repository with Biome
 - `npm run typecheck` - run TypeScript without emitting files
