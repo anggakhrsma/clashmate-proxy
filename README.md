@@ -50,6 +50,14 @@ Proxy routing:
 - the proxy forwards official Clash of Clans API routes under `/v1/*`
 - clients should only need to swap the base URL from the official API host to this proxy host
 
+Authentication:
+- proxy routes under `/v1/*` require the shared client secret
+- admin routes under `/admin` require the separate admin secret
+- send secrets with either:
+  - `x-clashmate-client-secret` / `x-clashmate-admin-secret`
+  - `x-client-secret` / `x-admin-secret`
+  - `Authorization: Bearer <secret>`
+
 ## Docker / Pterodactyl
 
 Build:

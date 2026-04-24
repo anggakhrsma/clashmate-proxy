@@ -6,12 +6,19 @@ import Fastify, {
   type HTTPMethods,
 } from 'fastify';
 
+import { createSecretAuthHook } from './auth/guards.js';
 import type { AppEnv } from './config/env.js';
 import type { ClashApiKeyManager } from './key-manager/service.js';
 import { ClashApiProxyService } from './proxy/service.js';
 
 type BuildAppInput = {
-  env: Pick<AppEnv, 'upstreamBaseUrl' | 'upstreamTimeoutMs'>;
+  env: Pick<
+    AppEnv,
+    | 'adminApiSecret'
+    | 'clientApiSecret'
+    | 'upstreamBaseUrl'
+    | 'upstreamTimeoutMs'
+  >;
   keyManager: Pick<ClashApiKeyManager, 'acquireKey' | 'markKeyHealthy'>;
 } & FastifyServerOptions;
 
@@ -54,6 +61,15 @@ async function registerProxyRoutes(
   app: FastifyInstance,
   input: BuildAppInput,
 ): Promise<void> {
+  app.addHook(
+    'onRequest',
+    createSecretAuthHook({
+      scope: 'client',
+      secret: input.env.clientApiSecret,
+      logger: app.log,
+    }),
+  );
+
   const proxyService = new ClashApiProxyService({
     upstreamBaseUrl: input.env.upstreamBaseUrl,
     upstreamTimeoutMs: input.env.upstreamTimeoutMs,
@@ -124,6 +140,28 @@ async function registerProxyRoutes(
   });
 }
 
+async function registerAdminRoutes(
+  app: FastifyInstance,
+  input: BuildAppInput,
+): Promise<void> {
+  app.addHook(
+    'onRequest',
+    createSecretAuthHook({
+      scope: 'admin',
+      secret: input.env.adminApiSecret,
+      logger: app.log,
+    }),
+  );
+
+  app.get('/admin', async () => {
+    return {
+      name: 'clashmate-proxy',
+      scope: 'admin',
+      status: 'ok',
+    };
+  });
+}
+
 export function buildApp(input: BuildAppInput) {
   const { env, keyManager, ...fastifyOptions } = input;
   const app = Fastify({
@@ -146,6 +184,14 @@ export function buildApp(input: BuildAppInput) {
 
   void app.register(async (proxyApp) => {
     await registerProxyRoutes(proxyApp, {
+      ...fastifyOptions,
+      env,
+      keyManager,
+    });
+  });
+
+  void app.register(async (adminApp) => {
+    await registerAdminRoutes(adminApp, {
       ...fastifyOptions,
       env,
       keyManager,

@@ -40,6 +40,10 @@ const REQUEST_HEADERS_TO_SKIP = new Set([
   'content-length',
   'host',
   'transfer-encoding',
+  'x-admin-secret',
+  'x-client-secret',
+  'x-clashmate-admin-secret',
+  'x-clashmate-client-secret',
 ]);
 
 const RESPONSE_HEADERS_TO_SKIP = new Set([
