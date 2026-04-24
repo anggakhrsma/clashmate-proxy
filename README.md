@@ -23,10 +23,22 @@ Required configuration includes:
 - `CLIENT_API_SECRET`
 - `ADMIN_API_SECRET`
 - `SQLITE_PATH`
+- `COC_MANAGED_KEY_ALLOWED_CIDRS`
 - at least one `COC_ACCOUNT_<N>_EMAIL` + `COC_ACCOUNT_<N>_PASSWORD` pair
 
 If required values are missing or invalid, the app fails fast during startup.
 The SQLite database file and parent directory are created automatically if they do not already exist.
+
+Managed key settings:
+- `COC_MANAGED_KEY_ALLOWED_CIDRS` should contain the static outbound IP/CIDR that Clash developer keys must allow.
+- `COC_MANAGED_KEY_NAME_PREFIX` and `COC_MANAGED_KEY_DESCRIPTION` control how managed portal keys are identified.
+- `KEY_UNHEALTHY_COOLDOWN_SECONDS` and `ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS` control temporary skip windows after failures.
+
+Key manager behavior:
+- runs a validation sweep on startup, then every `VALIDATION_SWEEP_INTERVAL_MINUTES`
+- persists account/key health, validation timestamps, and lifecycle events in SQLite
+- rotates eligible managed keys in round-robin order
+- can regenerate a failed key and mark unhealthy accounts/keys on portal or upstream auth failures
 
 ## Local startup
 

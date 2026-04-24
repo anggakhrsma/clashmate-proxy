@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { type AppEnv, loadEnv } from './config/env.js';
+import { createKeyManager } from './key-manager/service.js';
 import { initializePersistence } from './persistence/database.js';
 
 function loadValidatedEnv(): AppEnv {
@@ -51,11 +52,17 @@ const app = buildApp({
     level: env.logLevel,
   },
 });
+const keyManager = createKeyManager({
+  env,
+  persistence,
+  logger: app.log,
+});
 
 async function shutdown(signal: NodeJS.Signals) {
   app.log.info({ signal }, 'shutting down clashmate-proxy');
 
   try {
+    await keyManager.stop();
     await app.close();
     persistence.close();
     process.exit(0);
@@ -67,6 +74,8 @@ async function shutdown(signal: NodeJS.Signals) {
 
 async function start() {
   try {
+    await keyManager.start();
+
     await app.listen({
       host: env.host,
       port: env.port,
@@ -79,6 +88,7 @@ async function start() {
         nodeEnv: env.nodeEnv,
         sqlitePath: bootstrap.databasePath,
         configuredAccounts: env.cocDeveloperAccounts.length,
+        managedKeyCidrs: env.managedKeyAllowedCidrs,
         syncedAccounts: bootstrap.syncedAccounts,
         appliedMigrations: bootstrap.appliedMigrations,
       },

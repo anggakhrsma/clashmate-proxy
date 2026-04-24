@@ -10,6 +10,10 @@ const DEFAULT_CACHE_TTL_SECONDS = 10;
 const DEFAULT_VALIDATION_SWEEP_INTERVAL_MINUTES = 15;
 const DEFAULT_UPSTREAM_BASE_URL = 'https://api.clashofclans.com/v1';
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10000;
+const DEFAULT_KEY_UNHEALTHY_COOLDOWN_SECONDS = 60;
+const DEFAULT_ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS = 300;
+const DEFAULT_MANAGED_KEY_NAME_PREFIX = 'clashmate-proxy';
+const DEFAULT_MANAGED_KEY_DESCRIPTION = 'Managed by clashmate-proxy';
 const MAX_COC_ACCOUNTS = 10;
 
 const allowedNodeEnvironments = ['development', 'test', 'production'] as const;
@@ -44,6 +48,12 @@ export type AppEnv = {
   validationSweepIntervalMinutes: number;
   upstreamBaseUrl: string;
   upstreamTimeoutMs: number;
+  keyUnhealthyCooldownSeconds: number;
+  accountUnhealthyCooldownSeconds: number;
+  managedKeyAllowedCidrs: string[];
+  managedKeyNamePrefix: string;
+  managedKeyDescription: string;
+  managedKeyScopes: string[] | null;
   cocDeveloperAccounts: CocDeveloperAccount[];
 };
 
@@ -98,6 +108,36 @@ function parseRequiredString(name: string, errors: string[]): string {
   }
 
   return value;
+}
+
+function parseStringList(value: string | undefined, separator = ','): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(separator)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function parseRequiredStringList(
+  name: string,
+  value: string | undefined,
+  errors: string[],
+): string[] {
+  const values = parseStringList(value);
+
+  if (values.length === 0) {
+    errors.push(`${name} must contain at least one value.`);
+  }
+
+  return values;
+}
+
+function parseOptionalStringList(value: string | undefined): string[] | null {
+  const values = parseStringList(value);
+  return values.length > 0 ? values : null;
 }
 
 function parseEnumValue<T extends readonly string[]>(
@@ -230,7 +270,41 @@ export function loadEnv(): AppEnv {
     DEFAULT_UPSTREAM_TIMEOUT_MS,
     errors,
   );
+  const keyUnhealthyCooldownSeconds = parsePositiveInteger(
+    'KEY_UNHEALTHY_COOLDOWN_SECONDS',
+    readEnvValue('KEY_UNHEALTHY_COOLDOWN_SECONDS'),
+    DEFAULT_KEY_UNHEALTHY_COOLDOWN_SECONDS,
+    errors,
+  );
+  const accountUnhealthyCooldownSeconds = parsePositiveInteger(
+    'ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS',
+    readEnvValue('ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS'),
+    DEFAULT_ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS,
+    errors,
+  );
+  const managedKeyAllowedCidrs = parseRequiredStringList(
+    'COC_MANAGED_KEY_ALLOWED_CIDRS',
+    readEnvValue('COC_MANAGED_KEY_ALLOWED_CIDRS'),
+    errors,
+  );
+  const managedKeyNamePrefix =
+    readEnvValue('COC_MANAGED_KEY_NAME_PREFIX') ??
+    DEFAULT_MANAGED_KEY_NAME_PREFIX;
+  const managedKeyDescription =
+    readEnvValue('COC_MANAGED_KEY_DESCRIPTION') ??
+    DEFAULT_MANAGED_KEY_DESCRIPTION;
+  const managedKeyScopes = parseOptionalStringList(
+    readEnvValue('COC_MANAGED_KEY_SCOPES'),
+  );
   const cocDeveloperAccounts = parseCocDeveloperAccounts(errors);
+
+  for (const cidr of managedKeyAllowedCidrs) {
+    if (!cidr.includes('/')) {
+      errors.push(
+        `COC_MANAGED_KEY_ALLOWED_CIDRS entries must look like CIDR ranges. Received: ${cidr}`,
+      );
+    }
+  }
 
   if (clientApiSecret && adminApiSecret && clientApiSecret === adminApiSecret) {
     errors.push(
@@ -256,6 +330,12 @@ export function loadEnv(): AppEnv {
     validationSweepIntervalMinutes,
     upstreamBaseUrl,
     upstreamTimeoutMs,
+    keyUnhealthyCooldownSeconds,
+    accountUnhealthyCooldownSeconds,
+    managedKeyAllowedCidrs,
+    managedKeyNamePrefix,
+    managedKeyDescription,
+    managedKeyScopes,
     cocDeveloperAccounts,
   };
 }

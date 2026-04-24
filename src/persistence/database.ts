@@ -71,7 +71,23 @@ const initialSchemaMigration = {
   `,
 };
 
-const migrations = [initialSchemaMigration] as const;
+const apiKeysMetadataMigration = {
+  name: '002_api_keys_metadata',
+  sql: `
+    ALTER TABLE api_keys ADD COLUMN portal_key_id INTEGER;
+    ALTER TABLE api_keys ADD COLUMN is_managed INTEGER NOT NULL DEFAULT 1 CHECK (is_managed IN (0, 1));
+    ALTER TABLE api_keys ADD COLUMN last_seen_at TEXT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_account_portal_key_id
+      ON api_keys (developer_account_id, portal_key_id)
+      WHERE portal_key_id IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_api_keys_managed_active_health
+      ON api_keys (is_managed, is_active, is_healthy);
+  `,
+};
+
+const migrations = [initialSchemaMigration, apiKeysMetadataMigration] as const;
 
 type BooleanInteger = 0 | 1;
 
@@ -91,14 +107,17 @@ type DeveloperAccountRow = {
 type ApiKeyRow = {
   id: number;
   developer_account_id: number;
+  portal_key_id: number | null;
   key_name: string | null;
   key_value: string;
   cidr_ranges_json: string | null;
+  is_managed: BooleanInteger;
   is_active: BooleanInteger;
   is_healthy: BooleanInteger;
   invalid_reason: string | null;
   last_used_at: string | null;
   last_validated_at: string | null;
+  last_seen_at: string | null;
   unhealthy_until: string | null;
   created_at: string;
   updated_at: string;
@@ -126,14 +145,17 @@ export type DeveloperAccountRecord = {
 export type ApiKeyRecord = {
   id: number;
   developerAccountId: number;
+  portalKeyId: number | null;
   keyName: string | null;
   keyValue: string;
   cidrRanges: string[];
+  isManaged: boolean;
   isActive: boolean;
   isHealthy: boolean;
   invalidReason: string | null;
   lastUsedAt: string | null;
   lastValidatedAt: string | null;
+  lastSeenAt: string | null;
   unhealthyUntil: string | null;
   createdAt: string;
   updatedAt: string;
@@ -157,14 +179,17 @@ export type PersistenceBootstrapResult = {
 
 export type SaveApiKeyInput = {
   accountSlot: number;
+  portalKeyId?: number | null;
   keyName?: string | null;
   keyValue: string;
   cidrRanges?: string[];
+  isManaged?: boolean;
   isActive?: boolean;
   isHealthy?: boolean;
   invalidReason?: string | null;
   lastUsedAt?: string | null;
   lastValidatedAt?: string | null;
+  lastSeenAt?: string | null;
   unhealthyUntil?: string | null;
 };
 
@@ -179,11 +204,16 @@ export type UpdateDeveloperAccountStatusInput = {
 
 export type UpdateApiKeyStatusInput = {
   keyValue: string;
+  portalKeyId?: number | null;
+  keyName?: string | null;
+  cidrRanges?: string[];
+  isManaged?: boolean;
   isActive?: boolean;
   isHealthy?: boolean;
   invalidReason?: string | null;
   lastUsedAt?: string | null;
   lastValidatedAt?: string | null;
+  lastSeenAt?: string | null;
   unhealthyUntil?: string | null;
 };
 
@@ -205,6 +235,13 @@ function toBoolean(value: BooleanInteger): boolean {
 
 function toBooleanInteger(value: boolean): BooleanInteger {
   return value ? 1 : 0;
+}
+
+function hasOwnKey<TObject extends object, TKey extends keyof TObject>(
+  object: TObject,
+  key: TKey,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
 }
 
 function parseJsonArray(value: string | null): string[] {
@@ -239,14 +276,17 @@ function mapApiKeyRow(row: ApiKeyRow): ApiKeyRecord {
   return {
     id: row.id,
     developerAccountId: row.developer_account_id,
+    portalKeyId: row.portal_key_id,
     keyName: row.key_name,
     keyValue: row.key_value,
     cidrRanges: parseJsonArray(row.cidr_ranges_json),
+    isManaged: toBoolean(row.is_managed),
     isActive: toBoolean(row.is_active),
     isHealthy: toBoolean(row.is_healthy),
     invalidReason: row.invalid_reason,
     lastUsedAt: row.last_used_at,
     lastValidatedAt: row.last_validated_at,
+    lastSeenAt: row.last_seen_at,
     unhealthyUntil: row.unhealthy_until,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -426,11 +466,25 @@ export class SqlitePersistence {
 
     statement.run({
       slot: input.slot,
-      isEnabled: toBooleanInteger(input.isEnabled ?? account.isEnabled),
-      isHealthy: toBooleanInteger(input.isHealthy ?? account.isHealthy),
-      lastLoginAt: input.lastLoginAt ?? account.lastLoginAt,
-      unhealthyUntil: input.unhealthyUntil ?? account.unhealthyUntil,
-      lastError: input.lastError ?? account.lastError,
+      isEnabled: toBooleanInteger(
+        hasOwnKey(input, 'isEnabled')
+          ? (input.isEnabled ?? account.isEnabled)
+          : account.isEnabled,
+      ),
+      isHealthy: toBooleanInteger(
+        hasOwnKey(input, 'isHealthy')
+          ? (input.isHealthy ?? account.isHealthy)
+          : account.isHealthy,
+      ),
+      lastLoginAt: hasOwnKey(input, 'lastLoginAt')
+        ? (input.lastLoginAt ?? null)
+        : account.lastLoginAt,
+      unhealthyUntil: hasOwnKey(input, 'unhealthyUntil')
+        ? (input.unhealthyUntil ?? null)
+        : account.unhealthyUntil,
+      lastError: hasOwnKey(input, 'lastError')
+        ? (input.lastError ?? null)
+        : account.lastError,
       updatedAt: timestamp(),
     });
 
@@ -477,62 +531,114 @@ export class SqlitePersistence {
     }
 
     const now = timestamp();
-    const statement = this.database.prepare(`
-      INSERT INTO api_keys (
-        developer_account_id,
-        key_name,
-        key_value,
-        cidr_ranges_json,
-        is_active,
-        is_healthy,
-        invalid_reason,
-        last_used_at,
-        last_validated_at,
-        unhealthy_until,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        :developerAccountId,
-        :keyName,
-        :keyValue,
-        :cidrRangesJson,
-        :isActive,
-        :isHealthy,
-        :invalidReason,
-        :lastUsedAt,
-        :lastValidatedAt,
-        :unhealthyUntil,
-        :createdAt,
-        :updatedAt
-      )
-      ON CONFLICT(key_value) DO UPDATE SET
-        developer_account_id = excluded.developer_account_id,
-        key_name = excluded.key_name,
-        cidr_ranges_json = excluded.cidr_ranges_json,
-        is_active = excluded.is_active,
-        is_healthy = excluded.is_healthy,
-        invalid_reason = excluded.invalid_reason,
-        last_used_at = excluded.last_used_at,
-        last_validated_at = excluded.last_validated_at,
-        unhealthy_until = excluded.unhealthy_until,
-        updated_at = excluded.updated_at
-    `);
+    const existingByPortalKeyId =
+      typeof input.portalKeyId === 'number'
+        ? this.getApiKeyByAccountAndPortalKeyId(account.id, input.portalKeyId)
+        : null;
 
-    statement.run({
-      developerAccountId: account.id,
-      keyName: input.keyName ?? null,
-      keyValue: input.keyValue,
-      cidrRangesJson: JSON.stringify(input.cidrRanges ?? []),
-      isActive: toBooleanInteger(input.isActive ?? true),
-      isHealthy: toBooleanInteger(input.isHealthy ?? true),
-      invalidReason: input.invalidReason ?? null,
-      lastUsedAt: input.lastUsedAt ?? null,
-      lastValidatedAt: input.lastValidatedAt ?? null,
-      unhealthyUntil: input.unhealthyUntil ?? null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    if (existingByPortalKeyId) {
+      const updateStatement = this.database.prepare(`
+        UPDATE api_keys
+        SET key_name = :keyName,
+            key_value = :keyValue,
+            cidr_ranges_json = :cidrRangesJson,
+            is_managed = :isManaged,
+            is_active = :isActive,
+            is_healthy = :isHealthy,
+            invalid_reason = :invalidReason,
+            last_used_at = :lastUsedAt,
+            last_validated_at = :lastValidatedAt,
+            last_seen_at = :lastSeenAt,
+            unhealthy_until = :unhealthyUntil,
+            updated_at = :updatedAt
+        WHERE id = :id
+      `);
+
+      updateStatement.run({
+        id: existingByPortalKeyId.id,
+        keyName: input.keyName ?? null,
+        keyValue: input.keyValue,
+        cidrRangesJson: JSON.stringify(input.cidrRanges ?? []),
+        isManaged: toBooleanInteger(input.isManaged ?? true),
+        isActive: toBooleanInteger(input.isActive ?? true),
+        isHealthy: toBooleanInteger(input.isHealthy ?? true),
+        invalidReason: input.invalidReason ?? null,
+        lastUsedAt: input.lastUsedAt ?? existingByPortalKeyId.lastUsedAt,
+        lastValidatedAt: input.lastValidatedAt ?? null,
+        lastSeenAt: input.lastSeenAt ?? null,
+        unhealthyUntil: input.unhealthyUntil ?? null,
+        updatedAt: now,
+      });
+    } else {
+      const statement = this.database.prepare(`
+        INSERT INTO api_keys (
+          developer_account_id,
+          portal_key_id,
+          key_name,
+          key_value,
+          cidr_ranges_json,
+          is_managed,
+          is_active,
+          is_healthy,
+          invalid_reason,
+          last_used_at,
+          last_validated_at,
+          last_seen_at,
+          unhealthy_until,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          :developerAccountId,
+          :portalKeyId,
+          :keyName,
+          :keyValue,
+          :cidrRangesJson,
+          :isManaged,
+          :isActive,
+          :isHealthy,
+          :invalidReason,
+          :lastUsedAt,
+          :lastValidatedAt,
+          :lastSeenAt,
+          :unhealthyUntil,
+          :createdAt,
+          :updatedAt
+        )
+        ON CONFLICT(key_value) DO UPDATE SET
+          developer_account_id = excluded.developer_account_id,
+          portal_key_id = excluded.portal_key_id,
+          key_name = excluded.key_name,
+          cidr_ranges_json = excluded.cidr_ranges_json,
+          is_managed = excluded.is_managed,
+          is_active = excluded.is_active,
+          is_healthy = excluded.is_healthy,
+          invalid_reason = excluded.invalid_reason,
+          last_used_at = excluded.last_used_at,
+          last_validated_at = excluded.last_validated_at,
+          last_seen_at = excluded.last_seen_at,
+          unhealthy_until = excluded.unhealthy_until,
+          updated_at = excluded.updated_at
+      `);
+
+      statement.run({
+        developerAccountId: account.id,
+        portalKeyId: input.portalKeyId ?? null,
+        keyName: input.keyName ?? null,
+        keyValue: input.keyValue,
+        cidrRangesJson: JSON.stringify(input.cidrRanges ?? []),
+        isManaged: toBooleanInteger(input.isManaged ?? true),
+        isActive: toBooleanInteger(input.isActive ?? true),
+        isHealthy: toBooleanInteger(input.isHealthy ?? true),
+        invalidReason: input.invalidReason ?? null,
+        lastUsedAt: input.lastUsedAt ?? null,
+        lastValidatedAt: input.lastValidatedAt ?? null,
+        lastSeenAt: input.lastSeenAt ?? null,
+        unhealthyUntil: input.unhealthyUntil ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
 
     const savedKey = this.getApiKeyByValue(input.keyValue);
 
@@ -548,14 +654,17 @@ export class SqlitePersistence {
       SELECT
         id,
         developer_account_id,
+        portal_key_id,
         key_name,
         key_value,
         cidr_ranges_json,
+        is_managed,
         is_active,
         is_healthy,
         invalid_reason,
         last_used_at,
         last_validated_at,
+        last_seen_at,
         unhealthy_until,
         created_at,
         updated_at
@@ -568,19 +677,58 @@ export class SqlitePersistence {
     return row ? mapApiKeyRow(row) : null;
   }
 
-  listApiKeys(): ApiKeyRecord[] {
+  getApiKeyByAccountAndPortalKeyId(
+    developerAccountId: number,
+    portalKeyId: number,
+  ): ApiKeyRecord | null {
     const statement = this.database.prepare(`
       SELECT
         id,
         developer_account_id,
+        portal_key_id,
         key_name,
         key_value,
         cidr_ranges_json,
+        is_managed,
         is_active,
         is_healthy,
         invalid_reason,
         last_used_at,
         last_validated_at,
+        last_seen_at,
+        unhealthy_until,
+        created_at,
+        updated_at
+      FROM api_keys
+      WHERE developer_account_id = :developerAccountId
+        AND portal_key_id = :portalKeyId
+      LIMIT 1
+    `);
+
+    const row = statement.get({
+      developerAccountId,
+      portalKeyId,
+    }) as ApiKeyRow | undefined;
+
+    return row ? mapApiKeyRow(row) : null;
+  }
+
+  listApiKeys(): ApiKeyRecord[] {
+    const statement = this.database.prepare(`
+      SELECT
+        id,
+        developer_account_id,
+        portal_key_id,
+        key_name,
+        key_value,
+        cidr_ranges_json,
+        is_managed,
+        is_active,
+        is_healthy,
+        invalid_reason,
+        last_used_at,
+        last_validated_at,
+        last_seen_at,
         unhealthy_until,
         created_at,
         updated_at
@@ -600,11 +748,16 @@ export class SqlitePersistence {
 
     const statement = this.database.prepare(`
       UPDATE api_keys
-      SET is_active = :isActive,
+      SET portal_key_id = :portalKeyId,
+          key_name = :keyName,
+          cidr_ranges_json = :cidrRangesJson,
+          is_managed = :isManaged,
+          is_active = :isActive,
           is_healthy = :isHealthy,
           invalid_reason = :invalidReason,
           last_used_at = :lastUsedAt,
           last_validated_at = :lastValidatedAt,
+          last_seen_at = :lastSeenAt,
           unhealthy_until = :unhealthyUntil,
           updated_at = :updatedAt
       WHERE key_value = :keyValue
@@ -612,12 +765,47 @@ export class SqlitePersistence {
 
     statement.run({
       keyValue: input.keyValue,
-      isActive: toBooleanInteger(input.isActive ?? apiKey.isActive),
-      isHealthy: toBooleanInteger(input.isHealthy ?? apiKey.isHealthy),
-      invalidReason: input.invalidReason ?? apiKey.invalidReason,
-      lastUsedAt: input.lastUsedAt ?? apiKey.lastUsedAt,
-      lastValidatedAt: input.lastValidatedAt ?? apiKey.lastValidatedAt,
-      unhealthyUntil: input.unhealthyUntil ?? apiKey.unhealthyUntil,
+      portalKeyId: hasOwnKey(input, 'portalKeyId')
+        ? (input.portalKeyId ?? null)
+        : apiKey.portalKeyId,
+      keyName: hasOwnKey(input, 'keyName')
+        ? (input.keyName ?? null)
+        : apiKey.keyName,
+      cidrRangesJson: JSON.stringify(
+        hasOwnKey(input, 'cidrRanges')
+          ? (input.cidrRanges ?? [])
+          : apiKey.cidrRanges,
+      ),
+      isManaged: toBooleanInteger(
+        hasOwnKey(input, 'isManaged')
+          ? (input.isManaged ?? apiKey.isManaged)
+          : apiKey.isManaged,
+      ),
+      isActive: toBooleanInteger(
+        hasOwnKey(input, 'isActive')
+          ? (input.isActive ?? apiKey.isActive)
+          : apiKey.isActive,
+      ),
+      isHealthy: toBooleanInteger(
+        hasOwnKey(input, 'isHealthy')
+          ? (input.isHealthy ?? apiKey.isHealthy)
+          : apiKey.isHealthy,
+      ),
+      invalidReason: hasOwnKey(input, 'invalidReason')
+        ? (input.invalidReason ?? null)
+        : apiKey.invalidReason,
+      lastUsedAt: hasOwnKey(input, 'lastUsedAt')
+        ? (input.lastUsedAt ?? null)
+        : apiKey.lastUsedAt,
+      lastValidatedAt: hasOwnKey(input, 'lastValidatedAt')
+        ? (input.lastValidatedAt ?? null)
+        : apiKey.lastValidatedAt,
+      lastSeenAt: hasOwnKey(input, 'lastSeenAt')
+        ? (input.lastSeenAt ?? null)
+        : apiKey.lastSeenAt,
+      unhealthyUntil: hasOwnKey(input, 'unhealthyUntil')
+        ? (input.unhealthyUntil ?? null)
+        : apiKey.unhealthyUntil,
       updatedAt: timestamp(),
     });
 
