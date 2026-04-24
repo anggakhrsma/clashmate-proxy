@@ -107,6 +107,26 @@ function normalizeRawUrl(rawUrl: string): string {
   return rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
 }
 
+function buildUpstreamUrl(upstreamBaseUrl: string, rawUrl: string): string {
+  const normalizedRawUrl = normalizeRawUrl(rawUrl);
+  const baseUrl = new URL(upstreamBaseUrl);
+  const basePath = baseUrl.pathname.replace(/\/$/, '');
+  const rawPathAndQuery = new URL(normalizedRawUrl, baseUrl.origin);
+  const normalizedRawPath = rawPathAndQuery.pathname;
+  const shouldUseRawPath =
+    basePath.length === 0 ||
+    normalizedRawPath === basePath ||
+    normalizedRawPath.startsWith(`${basePath}/`);
+  const upstreamPath = shouldUseRawPath
+    ? normalizedRawPath
+    : `${basePath}${normalizedRawPath}`;
+
+  return new URL(
+    `${upstreamPath}${rawPathAndQuery.search}`,
+    baseUrl.origin,
+  ).toString();
+}
+
 function buildCacheKey(method: string, rawUrl: string): string {
   return `${method.toUpperCase()}:${normalizeRawUrl(rawUrl)}`;
 }
@@ -370,7 +390,7 @@ export class ClashApiProxyService {
     request: ForwardProxyRequestInput,
   ): Promise<ForwardProxyResponse> {
     const rawUrl = normalizeRawUrl(request.rawUrl);
-    const upstreamUrl = new URL(rawUrl, this.input.upstreamBaseUrl).toString();
+    const upstreamUrl = buildUpstreamUrl(this.input.upstreamBaseUrl, rawUrl);
     const cacheKey = buildCacheKey(request.method, rawUrl);
     const failures: UpstreamAttemptFailure[] = [];
     const maximumAttempts = this.input.upstreamMaxRetries + 1;

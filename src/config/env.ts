@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = '0.0.0.0';

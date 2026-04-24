@@ -116,7 +116,8 @@ class SerialTaskQueue {
   private queue: Promise<void> = Promise.resolve();
 
   run<T>(task: () => Promise<T> | T): Promise<T> {
-    const nextTask = this.queue.then(task, task);
+    const nextTask = this.queue.then(() => task());
+
     this.queue = nextTask.then(
       () => undefined,
       () => undefined,

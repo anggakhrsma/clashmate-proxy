@@ -140,3 +140,54 @@ test('proxy forwards representative routes, retries, and caches GET responses', 
   assert.equal(cachedResponse.keyLease, null);
   assert.equal(fetchCalls.length, 2);
 });
+
+test('proxy preserves upstream base path when callers omit /v1', async () => {
+  const fetchCalls: string[] = [];
+  const proxyService = new ClashApiProxyService({
+    cacheTtlSeconds: 0,
+    upstreamBaseUrl: 'https://api.clashofclans.com/v1',
+    upstreamTimeoutMs: 1_000,
+    upstreamMaxRetries: 0,
+    keyManager: {
+      acquireKey: async () => ({
+        apiKeyId: 1,
+        portalKeyId: 1,
+        accountId: 1,
+        accountSlot: 1,
+        accountEmail: 'one@example.com',
+        keyName: 'managed-one',
+        keyValue: 'managed-key-one',
+        cidrRanges: ['203.0.113.10/32'],
+        selectedAt: new Date().toISOString(),
+      }),
+      markKeyHealthy: async () => null,
+      reportUpstreamFailure: async () => ({
+        handled: true,
+        markedAccountUnhealthy: false,
+        markedKeyUnhealthy: true,
+        scheduledRegeneration: false,
+        scheduledValidationSweep: false,
+      }),
+    },
+    fetchImplementation: async (input) => {
+      fetchCalls.push(input.toString());
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+      });
+    },
+  });
+
+  const response = await proxyService.forwardRequest({
+    method: 'GET',
+    rawUrl: '/clans/%23TEST?limit=1',
+    headers: {
+      host: 'proxy.example.com',
+    },
+    body: undefined,
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(fetchCalls, [
+    'https://api.clashofclans.com/v1/clans/%23TEST?limit=1',
+  ]);
+});
