@@ -46,6 +46,10 @@ Key manager behavior:
 2. Install dependencies: `npm install`
 3. Start dev server: `npm run dev`
 
+Proxy routing:
+- the proxy forwards official Clash of Clans API routes under `/v1/*`
+- clients should only need to swap the base URL from the official API host to this proxy host
+
 ## Docker / Pterodactyl
 
 Build:

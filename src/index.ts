@@ -47,15 +47,17 @@ persistence.recordLifecycleEvent({
   },
 });
 
-const app = buildApp({
-  logger: {
-    level: env.logLevel,
-  },
-});
 const keyManager = createKeyManager({
   env,
   persistence,
-  logger: app.log,
+  logger: console,
+});
+const app = buildApp({
+  env,
+  keyManager,
+  logger: {
+    level: env.logLevel,
+  },
 });
 
 async function shutdown(signal: NodeJS.Signals) {
