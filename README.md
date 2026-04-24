@@ -1,6 +1,10 @@
 # clashmate-proxy
 
-Foundation for a Clash of Clans API proxy built with Fastify and TypeScript.
+Foundation for a Clash of Clans API proxy built with Fastify, TypeScript, and SQLite.
+
+## Runtime requirement
+
+- Node.js 22+
 
 ## Scripts
 
@@ -22,6 +26,7 @@ Required configuration includes:
 - at least one `COC_ACCOUNT_<N>_EMAIL` + `COC_ACCOUNT_<N>_PASSWORD` pair
 
 If required values are missing or invalid, the app fails fast during startup.
+The SQLite database file and parent directory are created automatically if they do not already exist.
 
 ## Local startup
 

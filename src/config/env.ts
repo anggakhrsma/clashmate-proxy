@@ -140,6 +140,7 @@ function parseUrl(
 
 function parseCocDeveloperAccounts(errors: string[]): CocDeveloperAccount[] {
   const accounts: CocDeveloperAccount[] = [];
+  const seenEmails = new Set<string>();
 
   for (let slot = 1; slot <= MAX_COC_ACCOUNTS; slot += 1) {
     const email = readEnvValue(`COC_ACCOUNT_${slot}_EMAIL`);
@@ -163,6 +164,12 @@ function parseCocDeveloperAccounts(errors: string[]): CocDeveloperAccount[] {
       continue;
     }
 
+    if (seenEmails.has(email)) {
+      errors.push(`Duplicate Clash of Clans developer account email: ${email}`);
+      continue;
+    }
+
+    seenEmails.add(email);
     accounts.push({
       slot,
       email,

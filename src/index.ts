@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { type AppEnv, loadEnv } from './config/env.js';
+import { initializePersistence } from './persistence/database.js';
 
 function loadValidatedEnv(): AppEnv {
   try {
@@ -12,7 +13,39 @@ function loadValidatedEnv(): AppEnv {
   }
 }
 
+function initializeValidatedPersistence(env: AppEnv) {
+  try {
+    return initializePersistence({
+      sqlitePath: env.sqlitePath,
+      developerAccounts: env.cocDeveloperAccounts,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'Unknown persistence error';
+    console.error(
+      `[clashmate-proxy] Failed to initialize persistence: ${message}`,
+    );
+    process.exit(1);
+  }
+}
+
 const env = loadValidatedEnv();
+const { persistence, bootstrap } = initializeValidatedPersistence(env);
+
+persistence.setAppState(
+  'service.bootstrap.last_started_at',
+  new Date().toISOString(),
+);
+persistence.recordLifecycleEvent({
+  eventType: 'service.bootstrap',
+  message: 'Persistence bootstrap completed.',
+  metadata: {
+    databasePath: bootstrap.databasePath,
+    appliedMigrations: bootstrap.appliedMigrations,
+    syncedAccounts: bootstrap.syncedAccounts,
+  },
+});
+
 const app = buildApp({
   logger: {
     level: env.logLevel,
@@ -24,6 +57,7 @@ async function shutdown(signal: NodeJS.Signals) {
 
   try {
     await app.close();
+    persistence.close();
     process.exit(0);
   } catch (error) {
     app.log.error({ err: error, signal }, 'graceful shutdown failed');
@@ -43,12 +77,15 @@ async function start() {
         host: env.host,
         port: env.port,
         nodeEnv: env.nodeEnv,
-        sqlitePath: env.sqlitePath,
+        sqlitePath: bootstrap.databasePath,
         configuredAccounts: env.cocDeveloperAccounts.length,
+        syncedAccounts: bootstrap.syncedAccounts,
+        appliedMigrations: bootstrap.appliedMigrations,
       },
       'clashmate-proxy started',
     );
   } catch (error) {
+    persistence.close();
     app.log.error({ err: error }, 'failed to start clashmate-proxy');
     process.exit(1);
   }
