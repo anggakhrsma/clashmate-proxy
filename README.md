@@ -44,6 +44,13 @@ Proxy resilience settings:
 - `UPSTREAM_MAX_RETRIES` bounds how many retry attempts are made after the first failed upstream attempt
 - retryable auth/key/IP/network/upstream failures temporarily sideline bad keys and retry with the next healthy candidate
 
+Observability:
+- Fastify/Pino structured JSON logs are enabled by default
+- request lifecycle logs include method, URL, route, status code, and duration
+- sensitive auth headers are redacted from logs
+- `GET /health` reports basic process + persistence health
+- `GET /ready` reports readiness based on enabled/healthy accounts, validation sweeps, and eligible managed keys
+
 GET response caching:
 - only `GET /v1...` proxy requests are cached
 - cache TTL is controlled by `CACHE_TTL_SECONDS`

@@ -22,6 +22,7 @@ type BuildAppInput = {
     | 'adminApiSecret'
     | 'cacheTtlSeconds'
     | 'clientApiSecret'
+    | 'nodeEnv'
     | 'upstreamBaseUrl'
     | 'upstreamTimeoutMs'
     | 'upstreamMaxRetries'
@@ -47,6 +48,14 @@ const PROXY_HTTP_METHODS = [
   'POST',
   'PUT',
 ] as const satisfies HTTPMethods[];
+
+const SENSITIVE_LOG_PATHS = [
+  'req.headers.authorization',
+  'req.headers.x-admin-secret',
+  'req.headers.x-client-secret',
+  'req.headers.x-clashmate-admin-secret',
+  'req.headers.x-clashmate-client-secret',
+];
 
 function getProxyBody(request: FastifyRequest): unknown {
   if (request.body === undefined) {
@@ -115,6 +124,38 @@ function sanitizeStatusSnapshot(
         updatedAt: managedKey.updatedAt,
       })),
     })),
+  };
+}
+
+function buildReadinessPayload(
+  snapshot: Awaited<ReturnType<ClashApiKeyManager['getStatusSnapshot']>>,
+) {
+  const enabledAccountCount = snapshot.accounts.filter(
+    (account) => account.isEnabled,
+  ).length;
+  const healthyAccountCount = snapshot.accounts.filter(
+    (account) => account.isEnabled && account.isHealthy,
+  ).length;
+  const ready =
+    enabledAccountCount > 0 &&
+    healthyAccountCount > 0 &&
+    snapshot.eligibleKeyCount > 0 &&
+    snapshot.lastValidationCompletedAt !== null;
+
+  return {
+    ready,
+    checks: {
+      hasEnabledAccounts: enabledAccountCount > 0,
+      hasHealthyEnabledAccounts: healthyAccountCount > 0,
+      hasEligibleManagedKeys: snapshot.eligibleKeyCount > 0,
+      hasCompletedValidationSweep: snapshot.lastValidationCompletedAt !== null,
+    },
+    summary: {
+      enabledAccountCount,
+      healthyAccountCount,
+      eligibleKeyCount: snapshot.eligibleKeyCount,
+      lastValidationCompletedAt: snapshot.lastValidationCompletedAt,
+    },
   };
 }
 
@@ -370,9 +411,82 @@ async function registerAdminRoutes(
 
 export function buildApp(input: BuildAppInput) {
   const { env, keyManager, persistence, ...fastifyOptions } = input;
+  const requestTimings = new WeakMap<FastifyRequest, bigint>();
+  const loggerOptions =
+    fastifyOptions.logger && typeof fastifyOptions.logger === 'object'
+      ? {
+          base: {
+            service: 'clashmate-proxy',
+            nodeEnv: env.nodeEnv,
+          },
+          redact: SENSITIVE_LOG_PATHS,
+          ...fastifyOptions.logger,
+        }
+      : (fastifyOptions.logger ?? {
+          level: 'info',
+          base: {
+            service: 'clashmate-proxy',
+            nodeEnv: env.nodeEnv,
+          },
+          redact: SENSITIVE_LOG_PATHS,
+        });
   const app = Fastify({
-    logger: fastifyOptions.logger ?? true,
+    logger: loggerOptions,
     ...fastifyOptions,
+  });
+
+  app.addHook('onRequest', async (request) => {
+    requestTimings.set(request, process.hrtime.bigint());
+
+    request.log.debug(
+      {
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        remoteAddress: request.ip,
+      },
+      'request started',
+    );
+  });
+
+  app.addHook('onError', async (request, reply, error) => {
+    const startedAt = requestTimings.get(request);
+    const durationMs = startedAt
+      ? Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      : null;
+
+    request.log.error(
+      {
+        err: error,
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        statusCode: reply.statusCode,
+        durationMs,
+      },
+      'request failed',
+    );
+  });
+
+  app.addHook('onResponse', async (request, reply) => {
+    const startedAt = requestTimings.get(request);
+    const durationMs = startedAt
+      ? Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      : null;
+
+    requestTimings.delete(request);
+
+    request.log.info(
+      {
+        requestId: request.id,
+        method: request.method,
+        url: request.url,
+        route: request.routeOptions.url,
+        statusCode: reply.statusCode,
+        durationMs,
+      },
+      'request completed',
+    );
   });
 
   app.get('/', async () => {
@@ -383,9 +497,46 @@ export function buildApp(input: BuildAppInput) {
   });
 
   app.get('/health', async () => {
+    const appState = persistence.listAppState();
+
     return {
+      name: 'clashmate-proxy',
       status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.round(process.uptime()),
+      checks: {
+        process: 'ok',
+        persistence: 'ok',
+      },
+      appStateCount: appState.length,
     };
+  });
+
+  app.get('/ready', async (request, reply) => {
+    const snapshot = await keyManager.getStatusSnapshot();
+    const readiness = buildReadinessPayload(snapshot);
+
+    if (!readiness.ready) {
+      request.log.warn(
+        {
+          requestId: request.id,
+          readiness,
+        },
+        'readiness check failed',
+      );
+
+      return reply.code(503).send({
+        status: 'not_ready',
+        timestamp: new Date().toISOString(),
+        ...readiness,
+      });
+    }
+
+    return reply.code(200).send({
+      status: 'ready',
+      timestamp: new Date().toISOString(),
+      ...readiness,
+    });
   });
 
   void app.register(async (proxyApp) => {
