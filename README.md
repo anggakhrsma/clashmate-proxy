@@ -84,6 +84,12 @@ Admin API:
 - `POST /admin/accounts/:slot/enable` - enable a configured developer account
 - `POST /admin/accounts/:slot/disable` - disable a configured developer account
 
+Bot integration:
+- switch the bot base URL from the official API host to this proxy host
+- replace the old official API token with the shared client secret
+- keep the same `/v1/...` paths, methods, query params, and response parsing
+- see `docs/bot-integration.md` for examples and migration notes
+
 ## Docker / Pterodactyl
 
 Build:
