@@ -327,9 +327,9 @@ export function loadEnv(): AppEnv {
   const cocDeveloperAccounts = parseCocDeveloperAccounts(errors);
 
   for (const cidr of managedKeyAllowedCidrs) {
-    if (!cidr.includes('/')) {
+    if (!/^\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?$/.test(cidr)) {
       errors.push(
-        `COC_MANAGED_KEY_ALLOWED_CIDRS entries must look like CIDR ranges. Received: ${cidr}`,
+        `COC_MANAGED_KEY_ALLOWED_CIDRS entries must be IPv4 addresses or CIDR ranges. Received: ${cidr}`,
       );
     }
   }

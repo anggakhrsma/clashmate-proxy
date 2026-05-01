@@ -78,7 +78,7 @@ async function resolveManagedKeyAllowedCidrs(env) {
         return env;
     }
     const outboundIp = await detectOutboundIpv4();
-    const cidr = `${outboundIp}/32`;
+    const cidr = outboundIp;
     console.info(`[clashmate-proxy] COC_MANAGED_KEY_ALLOWED_CIDRS not set; using detected outbound IP ${cidr}`);
     return {
         ...env,
