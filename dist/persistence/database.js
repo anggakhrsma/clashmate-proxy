@@ -332,7 +332,7 @@ class SqlitePersistence {
             throw new Error(`Cannot save API key because developer account slot ${input.accountSlot} does not exist.`);
         }
         const now = timestamp();
-        const existingByPortalKeyId = typeof input.portalKeyId === 'number'
+        const existingByPortalKeyId = input.portalKeyId !== undefined && input.portalKeyId !== null
             ? this.getApiKeyByAccountAndPortalKeyId(account.id, input.portalKeyId)
             : null;
         if (existingByPortalKeyId) {

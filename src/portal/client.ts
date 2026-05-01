@@ -46,7 +46,7 @@ export type DeveloperPortalAccountCredentials = Pick<
 >;
 
 export type DeveloperPortalKey = {
-  id: number;
+  id: string | number;
   name: string;
   description: string;
   key: string;
@@ -176,13 +176,17 @@ function normalizeStringArray(value: unknown): string[] {
     : [];
 }
 
-function normalizePortalKeyId(value: unknown): number | null {
+function normalizePortalKeyId(value: unknown): string | number | null {
   if (typeof value === 'number' && Number.isInteger(value)) {
     return value;
   }
 
   if (typeof value === 'string' && /^\d+$/.test(value)) {
     return Number.parseInt(value, 10);
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
   }
 
   return null;
@@ -467,7 +471,7 @@ export class ClashDeveloperPortalClient {
 
   async revokeKey(
     session: DeveloperPortalSession,
-    keyId: number,
+    keyId: string | number,
   ): Promise<void> {
     await this.request({
       operation: 'revokeKey',
@@ -621,7 +625,7 @@ export class ClashDeveloperPortalService {
 
   async revokeKeyForAccount(
     credentials: DeveloperPortalAccountCredentials,
-    keyId: number,
+    keyId: string | number,
   ): Promise<void> {
     await this.withSession(credentials, async (session) => {
       await this.client.revokeKey(session, keyId);

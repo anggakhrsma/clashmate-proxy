@@ -9,7 +9,7 @@ type KeyManagerLogger = {
 };
 export type ManagedApiKeyLease = {
     apiKeyId: number;
-    portalKeyId: number | null;
+    portalKeyId: string | number | null;
     accountId: number;
     accountSlot: number;
     accountEmail: string;

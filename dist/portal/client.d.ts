@@ -12,7 +12,7 @@ export type DeveloperPortalSession = {
 };
 export type DeveloperPortalAccountCredentials = Pick<CocDeveloperAccount, 'slot' | 'email' | 'password'>;
 export type DeveloperPortalKey = {
-    id: number;
+    id: string | number;
     name: string;
     description: string;
     key: string;
@@ -56,7 +56,7 @@ export declare class ClashDeveloperPortalClient {
     login(credentials: DeveloperPortalAccountCredentials): Promise<DeveloperPortalSession>;
     listKeys(session: DeveloperPortalSession): Promise<DeveloperPortalKey[]>;
     createKey(session: DeveloperPortalSession, input: CreateDeveloperPortalKeyInput): Promise<DeveloperPortalKey>;
-    revokeKey(session: DeveloperPortalSession, keyId: number): Promise<void>;
+    revokeKey(session: DeveloperPortalSession, keyId: string | number): Promise<void>;
     regenerateKey(session: DeveloperPortalSession, input: RegenerateDeveloperPortalKeyInput): Promise<DeveloperPortalKey>;
     private request;
 }
@@ -73,7 +73,7 @@ export declare class ClashDeveloperPortalService {
     loginAccount(credentials: DeveloperPortalAccountCredentials): Promise<DeveloperPortalSession>;
     listKeysForAccount(credentials: DeveloperPortalAccountCredentials): Promise<DeveloperPortalKey[]>;
     createKeyForAccount(credentials: DeveloperPortalAccountCredentials, input: CreateDeveloperPortalKeyInput): Promise<DeveloperPortalKey>;
-    revokeKeyForAccount(credentials: DeveloperPortalAccountCredentials, keyId: number): Promise<void>;
+    revokeKeyForAccount(credentials: DeveloperPortalAccountCredentials, keyId: string | number): Promise<void>;
     regenerateKeyForAccount(credentials: DeveloperPortalAccountCredentials, input: RegenerateDeveloperPortalKeyInput): Promise<DeveloperPortalKey>;
     private withSession;
 }

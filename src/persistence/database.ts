@@ -107,7 +107,7 @@ type DeveloperAccountRow = {
 type ApiKeyRow = {
   id: number;
   developer_account_id: number;
-  portal_key_id: number | null;
+  portal_key_id: string | number | null;
   key_name: string | null;
   key_value: string;
   cidr_ranges_json: string | null;
@@ -155,7 +155,7 @@ export type DeveloperAccountRecord = {
 export type ApiKeyRecord = {
   id: number;
   developerAccountId: number;
-  portalKeyId: number | null;
+  portalKeyId: string | number | null;
   keyName: string | null;
   keyValue: string;
   cidrRanges: string[];
@@ -195,7 +195,7 @@ export type PersistenceBootstrapResult = {
 
 export type SaveApiKeyInput = {
   accountSlot: number;
-  portalKeyId?: number | null;
+  portalKeyId?: string | number | null;
   keyName?: string | null;
   keyValue: string;
   cidrRanges?: string[];
@@ -220,7 +220,7 @@ export type UpdateDeveloperAccountStatusInput = {
 
 export type UpdateApiKeyStatusInput = {
   keyValue: string;
-  portalKeyId?: number | null;
+  portalKeyId?: string | number | null;
   keyName?: string | null;
   cidrRanges?: string[];
   isManaged?: boolean;
@@ -547,7 +547,7 @@ export class SqlitePersistence {
 
     const now = timestamp();
     const existingByPortalKeyId =
-      typeof input.portalKeyId === 'number'
+      input.portalKeyId !== undefined && input.portalKeyId !== null
         ? this.getApiKeyByAccountAndPortalKeyId(account.id, input.portalKeyId)
         : null;
 
@@ -694,7 +694,7 @@ export class SqlitePersistence {
 
   getApiKeyByAccountAndPortalKeyId(
     developerAccountId: number,
-    portalKeyId: number,
+    portalKeyId: string | number,
   ): ApiKeyRecord | null {
     const statement = this.database.prepare(`
       SELECT

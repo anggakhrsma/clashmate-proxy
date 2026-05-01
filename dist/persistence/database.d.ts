@@ -14,7 +14,7 @@ export type DeveloperAccountRecord = {
 export type ApiKeyRecord = {
     id: number;
     developerAccountId: number;
-    portalKeyId: number | null;
+    portalKeyId: string | number | null;
     keyName: string | null;
     keyValue: string;
     cidrRanges: string[];
@@ -50,7 +50,7 @@ export type PersistenceBootstrapResult = {
 };
 export type SaveApiKeyInput = {
     accountSlot: number;
-    portalKeyId?: number | null;
+    portalKeyId?: string | number | null;
     keyName?: string | null;
     keyValue: string;
     cidrRanges?: string[];
@@ -73,7 +73,7 @@ export type UpdateDeveloperAccountStatusInput = {
 };
 export type UpdateApiKeyStatusInput = {
     keyValue: string;
-    portalKeyId?: number | null;
+    portalKeyId?: string | number | null;
     keyName?: string | null;
     cidrRanges?: string[];
     isManaged?: boolean;
@@ -104,7 +104,7 @@ export declare class SqlitePersistence {
     getDeveloperAccountBySlot(slot: number): DeveloperAccountRecord | null;
     saveApiKey(input: SaveApiKeyInput): ApiKeyRecord;
     getApiKeyByValue(keyValue: string): ApiKeyRecord | null;
-    getApiKeyByAccountAndPortalKeyId(developerAccountId: number, portalKeyId: number): ApiKeyRecord | null;
+    getApiKeyByAccountAndPortalKeyId(developerAccountId: number, portalKeyId: string | number): ApiKeyRecord | null;
     listApiKeys(): ApiKeyRecord[];
     updateApiKeyStatus(input: UpdateApiKeyStatusInput): ApiKeyRecord;
     recordLifecycleEvent(input: RecordLifecycleEventInput): LifecycleEventRecord;

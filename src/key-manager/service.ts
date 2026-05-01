@@ -25,7 +25,7 @@ type ManagedKeyCandidate = {
 
 export type ManagedApiKeyLease = {
   apiKeyId: number;
-  portalKeyId: number | null;
+  portalKeyId: string | number | null;
   accountId: number;
   accountSlot: number;
   accountEmail: string;
@@ -1064,7 +1064,7 @@ export class ClashApiKeyManager {
 
       if (
         input.revokeExistingPortalKey !== false &&
-        typeof existingKey.portalKeyId === 'number'
+        existingKey.portalKeyId !== null
       ) {
         try {
           await this.portalService.revokeKeyForAccount(

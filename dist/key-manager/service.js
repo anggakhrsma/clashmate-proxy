@@ -669,7 +669,7 @@ class ClashApiKeyManager {
         try {
             const credentials = this.getCredentialsForSlot(account.slot);
             if (input.revokeExistingPortalKey !== false &&
-                typeof existingKey.portalKeyId === 'number') {
+                existingKey.portalKeyId !== null) {
                 try {
                     await this.portalService.revokeKeyForAccount(credentials, existingKey.portalKeyId);
                 }

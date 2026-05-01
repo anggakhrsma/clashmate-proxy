@@ -90,6 +90,9 @@ function normalizePortalKeyId(value) {
     if (typeof value === 'string' && /^\d+$/.test(value)) {
         return Number.parseInt(value, 10);
     }
+    if (typeof value === 'string' && value.trim().length > 0) {
+        return value;
+    }
     return null;
 }
 function normalizePortalString(value) {
