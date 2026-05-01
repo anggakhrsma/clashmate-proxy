@@ -167,7 +167,7 @@ function loadEnv() {
     const upstreamMaxRetries = parseNonNegativeInteger('UPSTREAM_MAX_RETRIES', readEnvValue('UPSTREAM_MAX_RETRIES'), DEFAULT_UPSTREAM_MAX_RETRIES, errors);
     const keyUnhealthyCooldownSeconds = parsePositiveInteger('KEY_UNHEALTHY_COOLDOWN_SECONDS', readEnvValue('KEY_UNHEALTHY_COOLDOWN_SECONDS'), DEFAULT_KEY_UNHEALTHY_COOLDOWN_SECONDS, errors);
     const accountUnhealthyCooldownSeconds = parsePositiveInteger('ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS', readEnvValue('ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS'), DEFAULT_ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS, errors);
-    const managedKeyAllowedCidrs = parseRequiredStringList('COC_MANAGED_KEY_ALLOWED_CIDRS', readEnvValue('COC_MANAGED_KEY_ALLOWED_CIDRS'), errors);
+    const managedKeyAllowedCidrs = parseStringList(readEnvValue('COC_MANAGED_KEY_ALLOWED_CIDRS'));
     const managedKeyNamePrefix = readEnvValue('COC_MANAGED_KEY_NAME_PREFIX') ??
         DEFAULT_MANAGED_KEY_NAME_PREFIX;
     const managedKeyDescription = readEnvValue('COC_MANAGED_KEY_DESCRIPTION') ??

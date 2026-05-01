@@ -312,10 +312,8 @@ export function loadEnv(): AppEnv {
     DEFAULT_ACCOUNT_UNHEALTHY_COOLDOWN_SECONDS,
     errors,
   );
-  const managedKeyAllowedCidrs = parseRequiredStringList(
-    'COC_MANAGED_KEY_ALLOWED_CIDRS',
+  const managedKeyAllowedCidrs = parseStringList(
     readEnvValue('COC_MANAGED_KEY_ALLOWED_CIDRS'),
-    errors,
   );
   const managedKeyNamePrefix =
     readEnvValue('COC_MANAGED_KEY_NAME_PREFIX') ??

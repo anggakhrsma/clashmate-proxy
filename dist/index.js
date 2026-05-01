@@ -4,6 +4,11 @@ const app_js_1 = require("./app.js");
 const env_js_1 = require("./config/env.js");
 const service_js_1 = require("./key-manager/service.js");
 const database_js_1 = require("./persistence/database.js");
+const OUTBOUND_IP_LOOKUP_URLS = [
+    'https://api.ipify.org',
+    'https://ifconfig.me/ip',
+    'https://icanhazip.com',
+];
 function loadValidatedEnv() {
     try {
         return (0, env_js_1.loadEnv)();
@@ -27,45 +32,110 @@ function initializeValidatedPersistence(env) {
         process.exit(1);
     }
 }
-const env = loadValidatedEnv();
-const { persistence, bootstrap } = initializeValidatedPersistence(env);
-persistence.setAppState('service.bootstrap.last_started_at', new Date().toISOString());
-persistence.recordLifecycleEvent({
-    eventType: 'service.bootstrap',
-    message: 'Persistence bootstrap completed.',
-    metadata: {
-        databasePath: bootstrap.databasePath,
-        appliedMigrations: bootstrap.appliedMigrations,
-        syncedAccounts: bootstrap.syncedAccounts,
-    },
-});
-const keyManager = (0, service_js_1.createKeyManager)({
-    env,
-    persistence,
-    logger: console,
-});
-const app = (0, app_js_1.buildApp)({
-    env,
-    keyManager,
-    persistence,
-    logger: {
-        level: env.logLevel,
-    },
-});
-async function shutdown(signal) {
-    app.log.info({ signal }, 'shutting down clashmate-proxy');
-    try {
-        await keyManager.stop();
-        await app.close();
-        persistence.close();
-        process.exit(0);
+function isPublicIpv4(value) {
+    const parts = value.trim().split('.');
+    if (parts.length !== 4) {
+        return false;
     }
-    catch (error) {
-        app.log.error({ err: error, signal }, 'graceful shutdown failed');
-        process.exit(1);
+    const octets = parts.map((part) => Number.parseInt(part, 10));
+    if (octets.some((octet, index) => !Number.isInteger(octet) ||
+        octet < 0 ||
+        octet > 255 ||
+        parts[index] !== String(octet))) {
+        return false;
     }
+    const [first, second] = octets;
+    return !(first === 10 ||
+        first === 127 ||
+        first === 0 ||
+        first === 169 && second === 254 ||
+        first === 172 && second >= 16 && second <= 31 ||
+        first === 192 && second === 168 ||
+        first >= 224);
 }
-async function start() {
+async function detectOutboundIpv4() {
+    for (const url of OUTBOUND_IP_LOOKUP_URLS) {
+        try {
+            const response = await fetch(url, {
+                signal: AbortSignal.timeout(5000),
+            });
+            if (!response.ok) {
+                continue;
+            }
+            const ip = (await response.text()).trim();
+            if (isPublicIpv4(ip)) {
+                return ip;
+            }
+        }
+        catch {
+            // Try the next lookup service.
+        }
+    }
+    throw new Error('Unable to auto-detect a public outbound IPv4 address. Set COC_MANAGED_KEY_ALLOWED_CIDRS manually, for example 203.0.113.10/32.');
+}
+async function resolveManagedKeyAllowedCidrs(env) {
+    if (env.managedKeyAllowedCidrs.length > 0) {
+        return env;
+    }
+    const outboundIp = await detectOutboundIpv4();
+    const cidr = `${outboundIp}/32`;
+    console.info(`[clashmate-proxy] COC_MANAGED_KEY_ALLOWED_CIDRS not set; using detected outbound IP ${cidr}`);
+    return {
+        ...env,
+        managedKeyAllowedCidrs: [cidr],
+    };
+}
+async function main() {
+    let env = loadValidatedEnv();
+    env = await resolveManagedKeyAllowedCidrs(env).catch((error) => {
+        const message = error instanceof Error
+            ? error.message
+            : 'Unknown outbound IP lookup error';
+        console.error(`[clashmate-proxy] ${message}`);
+        process.exit(1);
+    });
+    const { persistence, bootstrap } = initializeValidatedPersistence(env);
+    persistence.setAppState('service.bootstrap.last_started_at', new Date().toISOString());
+    persistence.recordLifecycleEvent({
+        eventType: 'service.bootstrap',
+        message: 'Persistence bootstrap completed.',
+        metadata: {
+            databasePath: bootstrap.databasePath,
+            appliedMigrations: bootstrap.appliedMigrations,
+            syncedAccounts: bootstrap.syncedAccounts,
+        },
+    });
+    const keyManager = (0, service_js_1.createKeyManager)({
+        env,
+        persistence,
+        logger: console,
+    });
+    const app = (0, app_js_1.buildApp)({
+        env,
+        keyManager,
+        persistence,
+        logger: {
+            level: env.logLevel,
+        },
+    });
+    async function shutdown(signal) {
+        app.log.info({ signal }, 'shutting down clashmate-proxy');
+        try {
+            await keyManager.stop();
+            await app.close();
+            persistence.close();
+            process.exit(0);
+        }
+        catch (error) {
+            app.log.error({ err: error, signal }, 'graceful shutdown failed');
+            process.exit(1);
+        }
+    }
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+        process.on(signal, () => {
+            void shutdown(signal);
+        });
+    }
     try {
         await keyManager.start();
         await app.listen({
@@ -89,10 +159,5 @@ async function start() {
         process.exit(1);
     }
 }
-for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-        void shutdown(signal);
-    });
-}
-void start();
+void main();
 //# sourceMappingURL=index.js.map
