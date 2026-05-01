@@ -1,0 +1,32 @@
+declare const allowedNodeEnvironments: readonly ["development", "test", "production"];
+declare const allowedLogLevels: readonly ["fatal", "error", "warn", "info", "debug", "trace", "silent"];
+type NodeEnvironment = (typeof allowedNodeEnvironments)[number];
+type LogLevel = (typeof allowedLogLevels)[number];
+export type CocDeveloperAccount = {
+    slot: number;
+    email: string;
+    password: string;
+};
+export type AppEnv = {
+    host: string;
+    port: number;
+    nodeEnv: NodeEnvironment;
+    logLevel: LogLevel;
+    clientApiSecret: string;
+    adminApiSecret: string;
+    sqlitePath: string;
+    cacheTtlSeconds: number;
+    validationSweepIntervalMinutes: number;
+    upstreamBaseUrl: string;
+    upstreamTimeoutMs: number;
+    upstreamMaxRetries: number;
+    keyUnhealthyCooldownSeconds: number;
+    accountUnhealthyCooldownSeconds: number;
+    managedKeyAllowedCidrs: string[];
+    managedKeyNamePrefix: string;
+    managedKeyDescription: string;
+    managedKeyScopes: string[] | null;
+    cocDeveloperAccounts: CocDeveloperAccount[];
+};
+export declare function loadEnv(): AppEnv;
+export {};
