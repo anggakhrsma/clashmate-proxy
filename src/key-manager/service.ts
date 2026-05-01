@@ -677,14 +677,34 @@ export class ClashApiKeyManager {
         persistedManagedKeys.map((apiKey) => apiKey.keyValue),
       );
 
-      let managedPortalKeys = portalKeys.filter((portalKey) =>
+      const allManagedPortalKeys = portalKeys.filter((portalKey) =>
         this.isManagedPortalKey(portalKey, knownManagedKeyValues),
       );
+      let managedPortalKeys = allManagedPortalKeys;
       managedPortalKeys = managedPortalKeys.filter(
         (portalKey) => portalKey.key.length > 0,
       );
 
       if (managedPortalKeys.length === 0) {
+        for (const staleManagedPortalKey of allManagedPortalKeys) {
+          await this.portalService.revokeKeyForAccount(
+            credentials,
+            staleManagedPortalKey.id,
+          );
+          summary.keysInvalidated += 1;
+          this.input.persistence.recordLifecycleEvent({
+            eventType: 'key.portal.stale_managed_revoked',
+            accountSlot: account.slot,
+            message:
+              'Stale managed API key was revoked before creating a replacement.',
+            metadata: {
+              reason,
+              portalKeyId: staleManagedPortalKey.id,
+              keyName: staleManagedPortalKey.name,
+            },
+          });
+        }
+
         const createdKey = await this.createManagedKeyUnlocked({
           account,
           reason: `${reason}:missing-managed-key`,
