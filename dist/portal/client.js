@@ -83,6 +83,18 @@ function normalizeStringArray(value) {
         ? value.filter((entry) => typeof entry === 'string')
         : [];
 }
+function normalizePortalKeyId(value) {
+    if (typeof value === 'number' && Number.isInteger(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && /^\d+$/.test(value)) {
+        return Number.parseInt(value, 10);
+    }
+    return null;
+}
+function normalizePortalString(value) {
+    return typeof value === 'string' ? value : null;
+}
 function normalizePortalKey(payload) {
     if (!isObject(payload)) {
         throw new DeveloperPortalError({
@@ -92,14 +104,13 @@ function normalizePortalKey(payload) {
             details: payload,
         });
     }
-    const id = payload.id;
-    const name = payload.name;
-    const description = payload.description;
-    const key = payload.key;
-    if (typeof id !== 'number' ||
-        typeof name !== 'string' ||
-        typeof description !== 'string' ||
-        typeof key !== 'string') {
+    const id = normalizePortalKeyId(payload.id);
+    const name = normalizePortalString(payload.name);
+    const description = normalizePortalString(payload.description) ?? '';
+    const key = normalizePortalString(payload.key) ??
+        normalizePortalString(payload.token) ??
+        normalizePortalString(payload.value);
+    if (id === null || name === null || key === null) {
         throw new DeveloperPortalError({
             code: 'INVALID_RESPONSE',
             message: 'Developer portal API key payload is missing required fields.',
