@@ -221,7 +221,17 @@ class ClashDeveloperPortalClient {
                 details: response.payload,
             });
         }
-        return response.payload.keys.map((key) => normalizePortalKey(key, { requireKey: false }));
+        return response.payload.keys.flatMap((key) => {
+            try {
+                return [normalizePortalKey(key, { requireKey: false })];
+            }
+            catch (error) {
+                if (error instanceof DeveloperPortalError) {
+                    return [];
+                }
+                throw error;
+            }
+        });
     }
     async createKey(session, input) {
         if (input.cidrRanges.length === 0) {
@@ -243,7 +253,7 @@ class ClashDeveloperPortalClient {
                 scopes: input.scopes ?? null,
             },
         });
-        return normalizePortalKey(response.payload.key);
+        return normalizePortalKey(response.payload.key ?? response.payload);
     }
     async revokeKey(session, keyId) {
         await this.request({
