@@ -95,6 +95,9 @@ function normalizePortalKeyId(value) {
 function normalizePortalString(value) {
     return typeof value === 'string' ? value : null;
 }
+function buildSyntheticPortalKeyId() {
+    return -Date.now();
+}
 function normalizePortalKey(payload, options = { requireKey: true }) {
     if (!isObject(payload)) {
         throw new DeveloperPortalError({
@@ -126,6 +129,43 @@ function normalizePortalKey(payload, options = { requireKey: true }) {
         cidrRanges: normalizeStringArray(payload.cidrRanges),
         scopes: normalizeStringArray(payload.scopes),
     };
+}
+function normalizeCreatedPortalKey(payload, input) {
+    if (isObject(payload)) {
+        const nestedKey = payload.key ?? payload.apiKey;
+        if (isObject(nestedKey)) {
+            return normalizePortalKey(nestedKey);
+        }
+        const key = normalizePortalString(nestedKey) ??
+            normalizePortalString(payload.token) ??
+            normalizePortalString(payload.value);
+        if (key) {
+            return {
+                id: normalizePortalKeyId(payload.id) ?? buildSyntheticPortalKeyId(),
+                name: normalizePortalString(payload.name) ?? input.name ?? 'clashmate-proxy',
+                description: normalizePortalString(payload.description) ?? input.description ?? '',
+                key,
+                cidrRanges: normalizeStringArray(payload.cidrRanges).length
+                    ? normalizeStringArray(payload.cidrRanges)
+                    : input.cidrRanges,
+                scopes: normalizeStringArray(payload.scopes).length
+                    ? normalizeStringArray(payload.scopes)
+                    : (input.scopes ?? []),
+            };
+        }
+    }
+    const key = normalizePortalString(payload);
+    if (key) {
+        return {
+            id: buildSyntheticPortalKeyId(),
+            name: input.name ?? 'clashmate-proxy',
+            description: input.description ?? '',
+            key,
+            cidrRanges: input.cidrRanges,
+            scopes: input.scopes ?? [],
+        };
+    }
+    return normalizePortalKey(payload);
 }
 function toPortalError(input) {
     const status = input.status ?? null;
@@ -253,7 +293,7 @@ class ClashDeveloperPortalClient {
                 scopes: input.scopes ?? null,
             },
         });
-        return normalizePortalKey(response.payload.key ?? response.payload);
+        return normalizeCreatedPortalKey(response.payload, input);
     }
     async revokeKey(session, keyId) {
         await this.request({

@@ -192,6 +192,10 @@ function normalizePortalString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
+function buildSyntheticPortalKeyId(): number {
+  return -Date.now();
+}
+
 function normalizePortalKey(
   payload: unknown,
   options: { requireKey: boolean } = { requireKey: true },
@@ -230,6 +234,55 @@ function normalizePortalKey(
     cidrRanges: normalizeStringArray(payload.cidrRanges),
     scopes: normalizeStringArray(payload.scopes),
   };
+}
+
+function normalizeCreatedPortalKey(
+  payload: unknown,
+  input: CreateDeveloperPortalKeyInput,
+): DeveloperPortalKey {
+  if (isObject(payload)) {
+    const nestedKey = payload.key ?? payload.apiKey;
+
+    if (isObject(nestedKey)) {
+      return normalizePortalKey(nestedKey);
+    }
+
+    const key =
+      normalizePortalString(nestedKey) ??
+      normalizePortalString(payload.token) ??
+      normalizePortalString(payload.value);
+
+    if (key) {
+      return {
+        id: normalizePortalKeyId(payload.id) ?? buildSyntheticPortalKeyId(),
+        name: normalizePortalString(payload.name) ?? input.name ?? 'clashmate-proxy',
+        description:
+          normalizePortalString(payload.description) ?? input.description ?? '',
+        key,
+        cidrRanges: normalizeStringArray(payload.cidrRanges).length
+          ? normalizeStringArray(payload.cidrRanges)
+          : input.cidrRanges,
+        scopes: normalizeStringArray(payload.scopes).length
+          ? normalizeStringArray(payload.scopes)
+          : (input.scopes ?? []),
+      };
+    }
+  }
+
+  const key = normalizePortalString(payload);
+
+  if (key) {
+    return {
+      id: buildSyntheticPortalKeyId(),
+      name: input.name ?? 'clashmate-proxy',
+      description: input.description ?? '',
+      key,
+      cidrRanges: input.cidrRanges,
+      scopes: input.scopes ?? [],
+    };
+  }
+
+  return normalizePortalKey(payload);
 }
 
 function toPortalError(input: {
@@ -409,7 +462,7 @@ export class ClashDeveloperPortalClient {
       },
     });
 
-    return normalizePortalKey(response.payload.key ?? response.payload);
+    return normalizeCreatedPortalKey(response.payload, input);
   }
 
   async revokeKey(

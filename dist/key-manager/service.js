@@ -51,6 +51,7 @@ function toErrorMetadata(error) {
             status: error.status,
             retryable: error.retryable,
             message: error.message,
+            detailsShape: describeDetailsShape(error.details),
         };
     }
     if (error instanceof Error) {
@@ -62,6 +63,18 @@ function toErrorMetadata(error) {
     return {
         message: 'Unknown error',
     };
+}
+function describeDetailsShape(value) {
+    if (Array.isArray(value)) {
+        return value.map((entry) => describeDetailsShape(entry));
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+            key,
+            Array.isArray(entry) ? 'array' : typeof entry,
+        ]));
+    }
+    return typeof value;
 }
 function compareCandidates(left, right) {
     if (left.account.slot !== right.account.slot) {

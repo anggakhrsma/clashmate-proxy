@@ -164,6 +164,7 @@ function toErrorMetadata(error: unknown): Record<string, unknown> {
       status: error.status,
       retryable: error.retryable,
       message: error.message,
+      detailsShape: describeDetailsShape(error.details),
     };
   }
 
@@ -177,6 +178,23 @@ function toErrorMetadata(error: unknown): Record<string, unknown> {
   return {
     message: 'Unknown error',
   };
+}
+
+function describeDetailsShape(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => describeDetailsShape(entry));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        Array.isArray(entry) ? 'array' : typeof entry,
+      ]),
+    );
+  }
+
+  return typeof value;
 }
 
 function compareCandidates(
