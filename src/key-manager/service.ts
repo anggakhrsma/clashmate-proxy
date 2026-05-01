@@ -680,6 +680,9 @@ export class ClashApiKeyManager {
       let managedPortalKeys = portalKeys.filter((portalKey) =>
         this.isManagedPortalKey(portalKey, knownManagedKeyValues),
       );
+      managedPortalKeys = managedPortalKeys.filter(
+        (portalKey) => portalKey.key.length > 0,
+      );
 
       if (managedPortalKeys.length === 0) {
         const createdKey = await this.createManagedKeyUnlocked({

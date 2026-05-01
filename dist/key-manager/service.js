@@ -377,6 +377,7 @@ class ClashApiKeyManager {
                 .filter((apiKey) => apiKey.developerAccountId === account.id && apiKey.isManaged);
             const knownManagedKeyValues = new Set(persistedManagedKeys.map((apiKey) => apiKey.keyValue));
             let managedPortalKeys = portalKeys.filter((portalKey) => this.isManagedPortalKey(portalKey, knownManagedKeyValues));
+            managedPortalKeys = managedPortalKeys.filter((portalKey) => portalKey.key.length > 0);
             if (managedPortalKeys.length === 0) {
                 const createdKey = await this.createManagedKeyUnlocked({
                     account,

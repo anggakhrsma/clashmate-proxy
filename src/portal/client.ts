@@ -192,7 +192,10 @@ function normalizePortalString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-function normalizePortalKey(payload: unknown): DeveloperPortalKey {
+function normalizePortalKey(
+  payload: unknown,
+  options: { requireKey: boolean } = { requireKey: true },
+): DeveloperPortalKey {
   if (!isObject(payload)) {
     throw new DeveloperPortalError({
       code: 'INVALID_RESPONSE',
@@ -210,7 +213,7 @@ function normalizePortalKey(payload: unknown): DeveloperPortalKey {
     normalizePortalString(payload.token) ??
     normalizePortalString(payload.value);
 
-  if (id === null || name === null || key === null) {
+  if (id === null || name === null || (options.requireKey && key === null)) {
     throw new DeveloperPortalError({
       code: 'INVALID_RESPONSE',
       message: 'Developer portal API key payload is missing required fields.',
@@ -223,7 +226,7 @@ function normalizePortalKey(payload: unknown): DeveloperPortalKey {
     id,
     name,
     description,
-    key,
+    key: key ?? '',
     cidrRanges: normalizeStringArray(payload.cidrRanges),
     scopes: normalizeStringArray(payload.scopes),
   };
@@ -367,7 +370,9 @@ export class ClashDeveloperPortalClient {
       });
     }
 
-    return response.payload.keys.map((key) => normalizePortalKey(key));
+    return response.payload.keys.map((key) =>
+      normalizePortalKey(key, { requireKey: false }),
+    );
   }
 
   async createKey(
